@@ -63,6 +63,10 @@ scripts/build.sh linux-x64 darwin-arm64    # both release targets, cross-compile
 scripts/install.sh                         # install to ~/.ocelot/bin/ocelot
 ```
 
+To check UI changes without real models or your own sessions, `scripts/dev-server.sh start`
+runs the built binary on throwaway data against a fake Anthropic API (`test/fake-anthropic.ts`),
+with the web UI at http://127.0.0.1:4852 (username `opencode`, password `test`).
+
 ### Changing patches
 
 `scripts/apply.sh` checks out the upstream release in `build/src` and applies every

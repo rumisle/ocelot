@@ -5,4 +5,6 @@ web/math-delimiters.patch
 web/message-meta.patch
 web/composer-one-line.patch
 core/subscription-cost.patch
+core/first-output-time.patch
 web/turn-stats.patch
+web/working-timer.patch

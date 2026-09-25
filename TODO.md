@@ -42,6 +42,8 @@ Open:
 
 - Never test against real models. Use a fake provider (like opencode-octopi's
   `test/fake-anthropic.ts`) and a throwaway server with its own XDG dirs.
+- `scripts/dev-server.sh start` runs one: the built binary + `test/fake-anthropic.ts` (streams with
+  realistic timings and cache usage; `LINES n`, `SHELL cmd`), web UI at http://127.0.0.1:4852 (opencode / test).
 
 ## 1. Plugin API (server)
 
@@ -65,15 +67,14 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       end or sending re-pins). Could not reproduce a failure headless (desktop + touch, plain text,
       tool calls, send while scrolled up). Need the exact case: device, what was on screen.
 - [ ] Tool status: running state + duration per call. Needs a UI design first.
-- [ ] Working timer (port of pi working-timer). Needs a UI design first.
+- [x] Working timer in the composer next to stop, whole run like pi (queued follow-ups included,
+      resets when idle). Removed the flickering "Working" row. Patch `web/working-timer`.
 - [x] Message meta: user messages lose "Build · model · time"; assistant keeps only the duration.
       Patch `web/message-meta`. (User revert/copy buttons stay in their row.)
 - [x] Turn stats: `1m 14s · 95% cache · $0.23` under the reply (summed over the turn's steps).
       Patch `web/turn-stats`.
-- [ ] TTFT and tokens/s in the turn stats. Not stored: `time.streamed` marks the *end* of the
-      provider response, not the first token. Needs a small core patch: record the first-output
-      time in the step publisher (`publish-llm-event.ts`, where `outputStarted` flips), carry it on
-      `session.step.streamed` or a new field, keep it on the message, show `ttft 480ms · 42 tok/s`.
+- [x] TTFT and tokens/s: patch `core/first-output-time` records `time.output`; turn stats show
+      `2s · ttft 560ms · 43 t/s · 96% cache · $0.02` (last model call; fits a phone line).
 
 ### Composer
 - [x] One-row composer `[+] [editor] [send]`, grows as you type; Model / Effort / Agent in the + menu.

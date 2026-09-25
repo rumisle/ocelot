@@ -1,0 +1,295 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 25 Sep 2026 13:43:35 +0800
+Subject: app/composer: working timer next to the stop button, like pi's
+
+While the agent works, the composer shows how long the current run has been
+going ("17s", "2m 05s", "1h 03m") left of the stop/send button. It keeps
+counting across steps, tool calls and queued follow-ups and clears when the
+session goes idle.
+
+The start time is session.execution.started's time, which the client data layer
+now remembers per session (data.session.runStarted). A page opened mid-run falls
+back to the last user message's time.
+
+The shimmering "Working" row at the bottom of the timeline is removed: it only
+showed when nothing else looked busy, so it kept appearing and disappearing.
+
+Ocelot-Patch: web/working-timer
+
+diff --git a/packages/app/src/composer/adapter.ts b/packages/app/src/composer/adapter.ts
+index ffc50788d..1a588d253 100644
+--- a/packages/app/src/composer/adapter.ts
++++ b/packages/app/src/composer/adapter.ts
+@@ -88,6 +88,8 @@ type ComposerAdapterBase = {
+   ready: Accessor<boolean>
+   controls: Accessor<ComposerControls>
+   working: Accessor<boolean>
++  /** ocelot: best guess at when the current run started, for a page opened mid-run. */
++  workingSince?: () => number | undefined
+   submitted: () => void
+ }
+ 
+diff --git a/packages/app/src/composer/editor/editor.tsx b/packages/app/src/composer/editor/editor.tsx
+index 930a07fe2..83a457314 100644
+--- a/packages/app/src/composer/editor/editor.tsx
++++ b/packages/app/src/composer/editor/editor.tsx
+@@ -1,4 +1,14 @@
+-import { createEffect, createMemo, createResource, createSignal, For, Show, Suspense, type JSX } from "solid-js"
++import {
++  createEffect,
++  createMemo,
++  createResource,
++  createSignal,
++  For,
++  onCleanup,
++  Show,
++  Suspense,
++  type JSX,
++} from "solid-js"
+ import { createStore } from "solid-js/store"
+ import { createResizeObserver } from "@solid-primitives/resize-observer"
+ import { FileIcon } from "@opencode/ui/file-icon"
+@@ -272,6 +282,7 @@ export function ComposerEditor(props: ComposerEditorProps) {
+             </Show>
+           </ScrollView>
+           <div data-slot="composer-actions" class="flex h-9 shrink-0 items-center">
++            <ComposerWorkingTimer since={view.submit.since?.()} />
+             <Show when={state.mode === "normal"}>
+               <ComposerEditorAlternateDelivery
+                 controller={props.controller}
+@@ -900,6 +911,40 @@ function ComposerEditorAlternateDelivery(props: { controller: ComposerEditorMode
+   )
+ }
+ 
++/** ocelot: how long the agent has been working on the current run, like pi's working timer. */
++function ComposerWorkingTimer(props: { since?: number }) {
++  const [now, setNow] = createSignal(Date.now())
++  createEffect(() => {
++    if (props.since === undefined) return
++    setNow(Date.now())
++    const timer = setInterval(() => setNow(Date.now()), 1000)
++    onCleanup(() => clearInterval(timer))
++  })
++  const elapsed = (since: number) => {
++    const total = Math.max(0, Math.floor((now() - since) / 1000))
++    const hours = Math.floor(total / 3600)
++    const minutes = Math.floor((total % 3600) / 60)
++    const seconds = total % 60
++    if (hours) return `${hours}h ${String(minutes).padStart(2, "0")}m`
++    if (minutes) return `${minutes}m ${String(seconds).padStart(2, "0")}s`
++    return `${seconds}s`
++  }
++  return (
++    <Show when={props.since}>
++      {(since) => (
++        <span
++          data-slot="composer-working-timer"
++          role="timer"
++          aria-label="Working"
++          class="me-2 text-[12px] leading-4 tabular-nums text-v2-text-text-faint"
++        >
++          {elapsed(since())}
++        </span>
++      )}
++    </Show>
++  )
++}
++
+ export function ComposerEditorSubmitButton(props: {
+   mode: ComposerMode
+   stopping: boolean
+diff --git a/packages/app/src/composer/editor/interaction.ts b/packages/app/src/composer/editor/interaction.ts
+index 441670818..051f6faa3 100644
+--- a/packages/app/src/composer/editor/interaction.ts
++++ b/packages/app/src/composer/editor/interaction.ts
+@@ -41,6 +41,8 @@ export type ComposerEditorView = {
+     available?: Accessor<boolean>
+     stopping: Accessor<boolean>
+     working?: Accessor<boolean>
++    /** ocelot: when the current run started (undefined while idle), for the working timer. */
++    since?: Accessor<number | undefined>
+     queue?: ComposerQueue
+     onSubmit: (options?: { alternate?: boolean }) => void
+     onStop: () => void
+@@ -173,10 +175,7 @@ export function createComposerEditor(input: {
+     if (event.type === "popover.select") {
+       if (!action || state.popover.type !== "command-menu") result.commands.forEach(execute)
+       if (action && event.item.kind === "command" && state.popover.type !== "command-menu") {
+-        draft.setPrompt(
+-          draft.state.prompt.filter(isAttachment),
+-          0,
+-        )
++        draft.setPrompt(draft.state.prompt.filter(isAttachment), 0)
+       }
+     }
+     setState(reconcile(result.state))
+diff --git a/packages/app/src/composer/model.ts b/packages/app/src/composer/model.ts
+index 83ec6cf2e..1c8201f76 100644
+--- a/packages/app/src/composer/model.ts
++++ b/packages/app/src/composer/model.ts
+@@ -1,7 +1,7 @@
+ import { ImagePreview } from "@opencode/ui/image-preview"
+ import { useDialog } from "@opencode/ui/context/dialog"
+ import type { ReferenceInfo } from "@opencode/client/promise"
+-import { createComponent, createEffect, createMemo, on } from "solid-js"
++import { createComponent, createEffect, createMemo, createSignal, on } from "solid-js"
+ import type { ComposerSuggestion } from "./types"
+ import { createComposerEditor, createComposerEditorState, type ComposerEditorModel } from "./editor/interaction"
+ import { selectionFromLines, type SelectedLineRange, useFile } from "@/workspaces/files/model"
+@@ -87,6 +87,11 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
+     return text.trim().length === 0 && attachments().length === 0 && commentCount() === 0
+   })
+   const stopping = createMemo(() => adapter.working() && blank())
++  // ocelot: when the current run started, for the working timer.
++  const [since, setSince] = createSignal<number>()
++  createEffect(
++    on(adapter.working, (working) => setSince(working ? (adapter.workingSince?.() ?? Date.now()) : undefined)),
++  )
+   const placeholder = () =>
+     composerPlaceholder(
+       mode(),
+@@ -367,6 +372,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
+         available,
+         stopping,
+         working: adapter.working,
++        since,
+         queue: options?.queue,
+         onSubmit: (submitOptions) => {
+           if (!available()) return
+diff --git a/packages/app/src/session/composer/adapter.ts b/packages/app/src/session/composer/adapter.ts
+index 98ae8bea8..3bf6c488d 100644
+--- a/packages/app/src/session/composer/adapter.ts
++++ b/packages/app/src/session/composer/adapter.ts
+@@ -25,6 +25,9 @@ export function createActiveComposerAdapter(input: {
+     ready: prompt.ready,
+     controls: input.controls,
+     working: () => data.session.status(id) === "running",
++    workingSince: () =>
++      data.session.runStarted(id) ??
++      data.session.message.list(id).findLast((message) => message.type === "user")?.time.created,
+     submitted: input.submitted,
+     setEditor: input.setEditor,
+     session: () => ({
+diff --git a/packages/app/src/session/timeline/message-timeline.tsx b/packages/app/src/session/timeline/message-timeline.tsx
+index 58fbbaaeb..04aa9ec5b 100644
+--- a/packages/app/src/session/timeline/message-timeline.tsx
++++ b/packages/app/src/session/timeline/message-timeline.tsx
+@@ -19,7 +19,6 @@ import { IconButton } from "@opencode/ui/icon-button"
+ import { InlineInput } from "@opencode/ui/inline-input"
+ import { Keybind } from "@opencode/ui/keybind"
+ import { Menu } from "@opencode/ui/menu"
+-import { TextShimmer } from "@opencode/ui/text-shimmer"
+ import { SummaryPopover } from "../summary/popover"
+ import { SessionContextUsage } from "@/session/timeline/session-context-usage"
+ import { useLanguage } from "@/runtime/i18n/language"
+@@ -316,53 +315,12 @@ function MessageTimelineView(
+     sessionID,
+     1000,
+   )
+-  const showWorking = createMemo(() => {
+-    const id = sessionID()
+-    if (!id || sessionStatus().type !== "busy") return false
+-    if (data.session.permission.list(id)?.length || data.session.form.list(id)?.length) return false
+-    const active = projection.activeMessageID()
+-    if (!active) return false
+-    const assistant = projection.assistantMessagesByParent().get(active)?.at(-1)
+-    if (assistant?.retry) return false
+-    // Pending steers still project under the previous response until delivery.
+-    // Its error must not hide feedback for a newly submitted prompt.
+-    if (
+-      assistant?.error &&
+-      !data.session.pending.list(id).some((item) => item.type === "user" && item.delivery === "steer")
+-    )
+-      return false
+-    const content = assistant?.content.at(-1)
+-    if (
+-      assistant?.time.completed === undefined &&
+-      assistant?.time.streamed === undefined &&
+-      content?.type === "text" &&
+-      content.text.trim()
+-    )
+-      return false
+-    const background = new Set(props.background.tasks().map((task) => task.id))
+-    return !projection.rows().some((row) => {
+-      if (row.userMessageID !== active) return false
+-      if (row._tag === "Thinking") return true
+-      if (row._tag === "Notice") {
+-        const message = messageByID().get(row.messageID)
+-        return message?.type === "compaction" && message.status === "running"
+-      }
+-      // Used groups keep the fallback regardless of disclosure state.
+-      if (row._tag !== "AssistantPart" || row.group.type === "context") return false
+-      return (row.group.type === "part" ? [row.group.ref] : row.group.refs).some((ref) => {
+-        const content = Timeline.resolveContent(messageByID().get(ref.messageID), ref.partID)
+-        if (content?.type !== "tool") return false
+-        if (content.state.status === "streaming" || content.state.status === "running") return true
+-        const taskID = content.state.metadata?.[content.name === "subagent" ? "sessionID" : "shellID"]
+-        return background.has(content.id) || (typeof taskID === "string" && background.has(taskID))
+-      })
+-    })
+-  })
+   return (
+     <VirtualizedTimeline
+       workspaceSession={workspaceSession}
+       bottomSpacer={
+-        <Show when={showWorking() || backgroundHintPresence.present()}>
++        // ocelot: no "Working" row; the composer shows a working timer instead.
++        <Show when={backgroundHintPresence.present()}>
+           <div
+             classList={{
+               "min-w-0 w-full max-w-full": true,
+@@ -372,11 +330,6 @@ function MessageTimelineView(
+             <div
+               class={`flex h-9 items-center gap-2 pt-3 text-[13px] font-[530] leading-text-compact ${turnPadding()}`}
+             >
+-              <Show when={showWorking()}>
+-                <div data-component="session-working" role="status">
+-                  <TextShimmer text={language.t("session.timeline.working")} active />
+-                </div>
+-              </Show>
+               <Show when={backgroundHintPresence.present()}>
+                 <div
+                   ref={setBackgroundHintRef}
+diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
+index 99ac059fc..31257b811 100644
+--- a/packages/client/src/solid/data.ts
++++ b/packages/client/src/solid/data.ts
+@@ -254,6 +254,10 @@ export function createData(config: CreateDataInput) {
+   let activeUpdates: Map<string, DataSessionStatus | undefined> | undefined
+   const pendingUpdates = new Map<string, Map<string, SessionInboxInfo | SessionInbox.Delivery | undefined>>()
+ 
++  // ocelot: when each running session's current run started (from session.execution.started).
++  // Unknown for runs already going when the page loaded.
++  const runStarted = new Map<string, number>()
++
+   function setSessionActive(sessionID: string, status: DataSessionStatus) {
+     activeUpdates?.set(sessionID, status)
+     setStore("session", "active", sessionID, status)
+@@ -1009,6 +1013,7 @@ export function createData(config: CreateDataInput) {
+         })
+         return
+       case "session.execution.started":
++        runStarted.set(event.data.sessionID, event.created)
+         setSessionActive(event.data.sessionID, "running")
+         return
+       case "session.compaction.started":
+@@ -1027,6 +1032,7 @@ export function createData(config: CreateDataInput) {
+       case "session.execution.succeeded":
+       case "session.execution.failed":
+       case "session.execution.interrupted":
++        runStarted.delete(event.data.sessionID)
+         setSessionActive(event.data.sessionID, "idle")
+         message.update(event.data.sessionID, (draft) => {
+           const currentAssistant = message.activeAssistant(draft)
+@@ -1380,6 +1386,10 @@ export function createData(config: CreateDataInput) {
+       status(sessionID: string) {
+         return store.session.active[sessionID] ?? "idle"
+       },
++      /** ocelot: when the current run started, if this client saw it start. */
++      runStarted(sessionID: string) {
++        return store.session.active[sessionID] === "running" ? runStarted.get(sessionID) : undefined
++      },
+       // Inputs are the pending user and synthetic items; compactions are control items.
+       input: {
+         list(sessionID: string) {

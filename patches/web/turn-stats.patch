@@ -1,31 +1,49 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: rumisle <why-excuse-quail@duck.com>
 Date: Fri, 25 Sep 2026 13:30:07 +0800
-Subject: session-ui/message: cache hit rate and cost in the turn's meta line
+Subject: session-ui/message: turn stats in the reply's meta line
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 After a turn finishes, the line under the reply reads e.g.
-"1m 14s · 95% cache · $0.23": the duration as before, then the share of prompt
-tokens read from the cache and the cost, both summed over every step of the turn.
-Cost is left out when the model has no prices.
+"1m 14s · ttft 480ms · 42 t/s · 95% cache · $0.23":
+- the duration, as before;
+- time to first token and tokens per second of the last model call that produced
+  output (from time.output, patch core/first-output-time);
+- the share of prompt tokens read from the cache and the cost, summed over every
+  step of the turn. Cost is left out when the model has no prices.
+Short labels so it fits one line on a phone.
 
 Ocelot-Patch: web/turn-stats
 
 diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
-index 73552e6e4..4348e28e8 100644
+index 73552e6e4..97427b5bf 100644
 --- a/packages/session-ui/src/message/current-message.tsx
 +++ b/packages/session-ui/src/message/current-message.tsx
-@@ -43,6 +43,7 @@ export function SessionAssistantContent(props: {
+@@ -5,7 +5,12 @@ import type {
+ } from "@opencode/client/promise"
+ import { Match, Switch, type ComponentProps } from "solid-js"
+ import type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
+-import { AssistantReasoningContent, AssistantTextContent, CurrentUserMessageDisplay } from "./message-content"
++import {
++  AssistantReasoningContent,
++  AssistantTextContent,
++  CurrentUserMessageDisplay,
++  type TurnStats,
++} from "./message-content"
+ import { CurrentContextToolGroup, CurrentFileToolGroup, ToolDisplay } from "../tools/tool-renderer"
+ import { currentToolError, currentToolInput, currentToolMetadata, currentToolOutput } from "./current-tool-state"
+ 
+@@ -43,6 +48,7 @@ export function SessionAssistantContent(props: {
    contentID: string
    showAssistantCopyPartID?: string | null
    turnDurationMs?: number | null
-+  turnStats?: { cost: number; cacheHit?: number }
++  turnStats?: TurnStats
    defaultOpen?: boolean
    reasoningDefaultOpen?: boolean
    toolOpen?: boolean
-@@ -59,6 +60,7 @@ export function SessionAssistantContent(props: {
+@@ -59,6 +65,7 @@ export function SessionAssistantContent(props: {
              message={props.message}
              showCopy={props.showAssistantCopyPartID === props.contentID}
              turnDurationMs={props.turnDurationMs}
@@ -34,18 +52,18 @@ index 73552e6e4..4348e28e8 100644
          )}
        </Match>
 diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
-index ee7b53c2b..33987d52b 100644
+index ee7b53c2b..16a5c6386 100644
 --- a/packages/session-ui/src/message/message-content.tsx
 +++ b/packages/session-ui/src/message/message-content.tsx
 @@ -451,6 +451,7 @@ export function AssistantTextContent(props: {
    message: SessionMessageAssistant
    showCopy: boolean
    turnDurationMs?: number | null
-+  turnStats?: { cost: number; cacheHit?: number }
++  turnStats?: TurnStats
  }) {
    const i18n = useI18n()
    const numfmt = createMemo(() => new Intl.NumberFormat(i18n.locale()))
-@@ -477,8 +478,12 @@ export function AssistantTextContent(props: {
+@@ -477,8 +478,14 @@ export function AssistantTextContent(props: {
      })
    })
    const meta = createMemo(() => {
@@ -53,15 +71,25 @@ index ee7b53c2b..33987d52b 100644
 +    const stats = duration() ? props.turnStats : undefined
      return [
        duration(),
++      stats?.ttft !== undefined ? `ttft ${formatLatency(stats.ttft)}` : "",
++      stats?.tps !== undefined ? `${Math.round(stats.tps)} t/s` : "",
 +      stats?.cacheHit !== undefined ? `${Math.round(stats.cacheHit * 100)}% cache` : "",
 +      stats && stats.cost > 0 ? formatCost(stats.cost) : "",
        interrupted() ? i18n.t("ui.message.interrupted") : "",
      ]
        .filter(Boolean)
-@@ -522,6 +527,11 @@ export function AssistantTextContent(props: {
+@@ -522,6 +529,19 @@ export function AssistantTextContent(props: {
    )
  }
  
++/** ocelot: per-turn numbers shown next to the duration. */
++export type TurnStats = { cost: number; cacheHit?: number; ttft?: number; tps?: number }
++
++function formatLatency(ms: number) {
++  if (ms < 1000) return `${Math.round(ms)}ms`
++  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`
++}
++
 +function formatCost(cost: number) {
 +  if (cost < 0.01) return "<$0.01"
 +  return `$${cost < 10 ? cost.toFixed(2) : cost.toFixed(1)}`
@@ -71,10 +99,10 @@ index ee7b53c2b..33987d52b 100644
    id: string
    content: SessionMessageAssistantReasoning
 diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
-index ee677260e..2045e07d6 100644
+index ee677260e..c2b2daaca 100644
 --- a/packages/session-ui/src/timeline/session-timeline-row.tsx
 +++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
-@@ -104,6 +104,21 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -104,6 +104,31 @@ export function createSessionTimelineRowRenderer(input: {
      if (completed === undefined || completed < user.time.created) return undefined
      return completed - user.time.created
    }
@@ -91,12 +119,22 @@ index ee677260e..2045e07d6 100644
 +      prompt += tokens.input + tokens.cache.read + tokens.cache.write
 +      cached += tokens.cache.read
 +    }
-+    return { cost, cacheHit: prompt > 0 ? cached / prompt : undefined }
++    // Time to first token and generation speed come from the last model call that produced output.
++    const last = messages.findLast((message) => message.time.output !== undefined && !!message.tokens)
++    const output = last?.time.output
++    const end = last?.time.streamed ?? last?.time.completed
++    const generated = last?.tokens ? last.tokens.output + last.tokens.reasoning : 0
++    return {
++      cost,
++      cacheHit: prompt > 0 ? cached / prompt : undefined,
++      ttft: last && output !== undefined ? output - last.time.created : undefined,
++      tps: output !== undefined && end !== undefined && end - output > 0 ? generated / ((end - output) / 1000) : undefined,
++    }
 +  }
    const copyContentID = (messageID: string) => {
      if (workingTurn(messageID)) return null
      const message = input.projection
-@@ -276,6 +291,7 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -276,6 +301,7 @@ export function createSessionTimelineRowRenderer(input: {
                  contentID={ref()!.partID}
                  showAssistantCopyPartID={copyContentID(row().userMessageID)}
                  turnDurationMs={duration(row().userMessageID)}

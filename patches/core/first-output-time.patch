@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 25 Sep 2026 13:38:40 +0800
+Subject: core/session: record when a step's first output arrived
+
+Adds time.output to assistant messages: when the first reasoning, text or tool
+call of the model response arrived. With time.created (request sent) and
+time.streamed (response ended) that gives time to first token and generation
+speed. The step publisher notes the time and sends it on session.step.streamed;
+the client's generated types are regenerated (packages/client: bun run generate).
+
+Ocelot-Patch: core/first-output-time
+
+diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
+index b86373a5e..c44dc0730 100644
+--- a/packages/client/src/effect/api/api.ts
++++ b/packages/client/src/effect/api/api.ts
+@@ -847,7 +847,11 @@ export type SessionLogOutput =
+                 readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
+               }
+             | undefined
+-          readonly data: { readonly sessionID: Session.ID; readonly assistantMessageID: SessionMessage.ID }
++          readonly data: {
++            readonly sessionID: Session.ID
++            readonly assistantMessageID: SessionMessage.ID
++            readonly firstOutput?: number | undefined
++          }
+         }
+       | {
+           readonly id: Event.ID
+diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
+index a7d41240f..afa029e04 100644
+--- a/packages/client/src/promise/generated/types.ts
++++ b/packages/client/src/promise/generated/types.ts
+@@ -732,7 +732,7 @@ export type SessionStepStreamed = {
+   type: "session.step.streamed"
+   durable: { aggregateID: string; seq: number; version: 1 }
+   location?: LocationRef
+-  data: { sessionID: string; assistantMessageID: string }
++  data: { sessionID: string; assistantMessageID: string; firstOutput?: number }
+ }
+ 
+ export type SessionTextStarted = {
+@@ -2230,7 +2230,7 @@ export type SessionInboxEnqueued = {
+ export type SessionMessageAssistant = {
+   id: string
+   metadata?: { [x: string]: JsonValue }
+-  time: { created: number; streamed?: number; completed?: number }
++  time: { created: number; output?: number; streamed?: number; completed?: number }
+   type: "assistant"
+   agent: string
+   model: ModelRef
+@@ -3109,7 +3109,12 @@ export type SessionImportInput = {
+       | {
+           readonly id: string
+           readonly metadata?: { readonly [x: string]: JsonValue }
+-          readonly time: { readonly created: number; readonly streamed?: number; readonly completed?: number }
++          readonly time: {
++            readonly created: number
++            readonly output?: number
++            readonly streamed?: number
++            readonly completed?: number
++          }
+           readonly type: "assistant"
+           readonly agent: string
+           readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+@@ -3426,7 +3431,12 @@ export type SessionImportInput = {
+       | {
+           readonly id: string
+           readonly metadata?: { readonly [x: string]: JsonValue }
+-          readonly time: { readonly created: number; readonly streamed?: number; readonly completed?: number }
++          readonly time: {
++            readonly created: number
++            readonly output?: number
++            readonly streamed?: number
++            readonly completed?: number
++          }
+           readonly type: "assistant"
+           readonly agent: string
+           readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+@@ -3743,7 +3753,12 @@ export type SessionImportInput = {
+       | {
+           readonly id: string
+           readonly metadata?: { readonly [x: string]: JsonValue }
+-          readonly time: { readonly created: number; readonly streamed?: number; readonly completed?: number }
++          readonly time: {
++            readonly created: number
++            readonly output?: number
++            readonly streamed?: number
++            readonly completed?: number
++          }
+           readonly type: "assistant"
+           readonly agent: string
+           readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
+index 4a1666f88..99ac059fc 100644
+--- a/packages/client/src/solid/data.ts
++++ b/packages/client/src/solid/data.ts
+@@ -849,6 +849,7 @@ export function createData(config: CreateDataInput) {
+             existing.providerState = undefined
+             existing.time.created = event.data.started
+             existing.time.streamed = undefined
++            existing.time.output = undefined
+             existing.time.completed = undefined
+             if (event.data.snapshot) existing.snapshot = { ...existing.snapshot, start: event.data.snapshot }
+             return
+@@ -873,6 +874,7 @@ export function createData(config: CreateDataInput) {
+       case "session.step.streamed":
+         message.editAssistant(event.data.sessionID, event.data.assistantMessageID, (assistant) => {
+           assistant.time.streamed = event.created
++          if (event.data.firstOutput !== undefined) assistant.time.output = event.data.firstOutput
+         })
+         return
+       case "session.step.ended": {
+diff --git a/packages/core/src/session/message-updater.ts b/packages/core/src/session/message-updater.ts
+index 6d2a40e41..e39c659e2 100644
+--- a/packages/core/src/session/message-updater.ts
++++ b/packages/core/src/session/message-updater.ts
+@@ -226,6 +226,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
+                 draft.providerState = undefined
+                 draft.time.created = DateTime.makeUnsafe(event.data.started)
+                 draft.time.streamed = undefined
++                draft.time.output = undefined
+                 draft.time.completed = undefined
+                 if (event.data.snapshot) draft.snapshot = { ...draft.snapshot, start: event.data.snapshot }
+               }),
+@@ -257,6 +258,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
+       "session.step.streamed": (event) => {
+         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+           draft.time.streamed = created
++          if (event.data.firstOutput !== undefined) draft.time.output = DateTime.makeUnsafe(event.data.firstOutput)
+         })
+       },
+       "session.step.ended": (event) => {
+diff --git a/packages/core/src/session/runner/publish-llm-event.ts b/packages/core/src/session/runner/publish-llm-event.ts
+index 834a023a1..ffb9baa14 100644
+--- a/packages/core/src/session/runner/publish-llm-event.ts
++++ b/packages/core/src/session/runner/publish-llm-event.ts
+@@ -93,6 +93,8 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
+   let stepStarted = false
+   let providerFailed = false
+   let outputStarted = false
++  // ocelot: time of the first output event, for time to first token.
++  let firstOutput: number | undefined
+   let stepFailure: SessionError.Error | undefined
+   let stepSettlement: StepRecord["finish"]
+ 
+@@ -115,6 +117,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
+     yield* bus.publish(SessionEvent.Step.Streamed, {
+       sessionID: input.sessionID,
+       assistantMessageID: yield* startAssistant(),
++      ...(firstOutput === undefined ? {} : { firstOutput }),
+     })
+   })
+   const providerState = (metadata: ProviderMetadata | undefined) => metadata?.[input.providerMetadataKey]
+@@ -383,6 +386,11 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
+   )
+ 
+   const publish = Effect.fnUntraced(function* (event: LLMEvent) {
++    if (
++      firstOutput === undefined &&
++      (event.type === "text-start" || event.type === "reasoning-start" || event.type === "tool-input-start" || event.type === "tool-call")
++    )
++      firstOutput = Date.now()
+     switch (event.type) {
+       case "step-start":
+         yield* startAssistant()
+diff --git a/packages/schema/src/session-event.ts b/packages/schema/src/session-event.ts
+index bfd430f3c..79be9aaf4 100644
+--- a/packages/schema/src/session-event.ts
++++ b/packages/schema/src/session-event.ts
+@@ -351,6 +351,8 @@ export namespace Step {
+     schema: {
+       ...Base,
+       assistantMessageID: SessionMessage.ID,
++      /** ocelot: when the first output (reasoning, text or a tool call) arrived, for time to first token. */
++      firstOutput: NonNegativeInt.pipe(optional),
+     },
+   })
+   export type Streamed = typeof Streamed.Type
+diff --git a/packages/schema/src/session-message.ts b/packages/schema/src/session-message.ts
+index 55ef74558..c83442bc5 100644
+--- a/packages/schema/src/session-message.ts
++++ b/packages/schema/src/session-message.ts
+@@ -229,6 +229,8 @@ export const Assistant = Schema.Struct({
+   retry: AssistantRetry.pipe(optional),
+   time: Schema.Struct({
+     created: DateTimeUtcFromMillis,
++    /** ocelot: when the first output (reasoning, text or a tool call) arrived. */
++    output: DateTimeUtcFromMillis.pipe(optional),
+     /** When the provider response body ended, before tool settlement. */
+     streamed: DateTimeUtcFromMillis.pipe(optional),
+     completed: DateTimeUtcFromMillis.pipe(optional),
