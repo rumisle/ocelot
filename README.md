@@ -1,57 +1,105 @@
 # ocelot
 
-OpenCode v2 with our fixes, kept as a small patch set on top of a pinned upstream
-release (the way Helium sits on Chromium).
+Improvements for [OpenCode](https://github.com/anomalyco/opencode) v2, kept as a small
+set of patches on top of official OpenCode releases.
 
-- `upstream.txt`: the upstream tag we build on (e.g. `v2.0.16`).
-- `revision.txt`: our release counter on that tag. The version is `<tag>-<revision>`,
-  e.g. `2.0.16-1`. A new upstream tag resets it to 1; a patch-only release bumps it.
-- `patches/series`: the patches, applied in order. Each patch is one feature, stored as
-  `patches/<area>/<name>.patch` in `git format-patch` form.
+Each ocelot release is an upstream OpenCode release plus the patches in
+[`patches/`](patches/series). Everything else (config, plugins, providers, the TUI
+and the web UI) works the same as in OpenCode.
 
-## Working on patches
+## Install
+
+Download the archive for your platform from
+[Releases](https://github.com/rumisle/ocelot/releases) and put the `ocelot` binary on
+your `PATH`:
 
 ```bash
-scripts/apply.sh    # build/src = upstream tag + patches, one commit per patch on branch "ocelot"
-# edit in build/src with normal git: new commits, rebase -i, fixup, amend
-scripts/export.sh   # write the commits back to patches/ and regenerate patches/series
+v=2.0.16-1 target=linux-x64   # or darwin-arm64
+gh release download "v$v" -R rumisle/ocelot -p "ocelot-$v-$target.tar.gz"
+tar -xzf "ocelot-$v-$target.tar.gz"
+install -m 755 "ocelot-$target/ocelot" ~/.local/bin/ocelot
 ```
 
-Every commit needs an `Ocelot-Patch: <area>/<name>` trailer naming its patch file:
+Then use `ocelot` wherever you would use `opencode`:
+
+```bash
+ocelot                  # TUI
+ocelot service status   # background server, also serves the web UI
+ocelot pair             # sign-in link for the web UI
+```
+
+## Alongside OpenCode
+
+Ocelot reads the same config (`~/.config/opencode`), plugins and provider logins as
+OpenCode, so there is nothing to set up again.
+
+It runs its own background server with its own port and session database
+(`~/.local/share/opencode/opencode-ocelot.db`), so it can be installed next to stock
+OpenCode without the two interfering. Sessions from one don't show up in the other.
+
+Ocelot never updates itself from upstream OpenCode; new versions come from this repo's
+releases.
+
+## Versions
+
+Versions are `<upstream version>-<revision>`: `2.0.16-1` is the first ocelot release on
+OpenCode 2.0.16. The revision goes back to 1 when ocelot moves to a new upstream
+release, and goes up for releases that only change our patches.
+
+## Development
+
+Requirements: git and curl. The scripts download the bun version upstream uses.
+
+```bash
+scripts/apply.sh                           # build/src = upstream release + our patches
+scripts/build.sh                           # build for this machine
+scripts/build.sh linux-x64 darwin-arm64    # both release targets, cross-compiled
+scripts/install.sh                         # install to ~/.local/bin/ocelot
+```
+
+### Changing patches
+
+`scripts/apply.sh` checks out the upstream release in `build/src` and applies every
+patch as its own commit on the `ocelot` branch. Work there with normal git (new commits,
+`rebase -i`, `commit --fixup`), then write the result back:
+
+```bash
+scripts/export.sh   # updates patches/ and patches/series from the commits
+```
+
+Each commit becomes one patch file. It needs an `Ocelot-Patch:` trailer naming that file:
 
 ```bash
 git commit -m "web/markdown: render \$…\$ math" --trailer "Ocelot-Patch: web/math-delimiters"
 ```
 
-Commit titles lead with the area, not `feat:`/`fix:`. If a patch has an upstream PR,
-link it in the message, so the patch can be dropped once that PR merges.
+- One change per patch, so each can be updated or dropped on its own.
+- Commit titles start with the area they touch (`web/timeline: …`, `cli/updater: …`).
+- If the change is also proposed upstream, link the PR in the message. Once upstream
+  merges it, the patch is dropped.
 
-## Updating upstream
-
-```bash
-scripts/bump.sh v2.0.17   # pins the tag, resets the revision, re-applies with 3-way merges
-```
-
-On a conflict it stops mid `git am` in `build/src`: resolve, `git am --continue`
-(repeat until all patches are in), then `scripts/export.sh`.
-
-## Building and installing
+### Moving to a new upstream release
 
 ```bash
-scripts/build.sh                          # this machine
-scripts/build.sh linux-x64 darwin-arm64   # both release targets (cross-compiled)
-scripts/install.sh                        # ~/.local/bin/ocelot, restarts the service
+scripts/bump.sh           # latest upstream release, or: scripts/bump.sh v2.0.17
 ```
 
-Builds use the bun version upstream pins (downloaded to `~/.cache/ocelot`). The upstream
-mirror is a blobless clone in `~/.cache/ocelot/upstream.git`.
+This updates `upstream.txt`, resets `revision.txt` to 1 and re-applies every patch with
+3-way merges. If a patch conflicts, it stops in `build/src`: resolve the conflict,
+`git am --continue` until all patches are in, then run `scripts/export.sh`.
 
-## How it differs from OpenCode at runtime
+### Releasing
 
-Ocelot is built with its own release channel, `ocelot`, so it runs beside stock OpenCode
-without sharing its background service: its own service registration
-(`~/.local/state/opencode/service-ocelot.json`), port and database
-(`~/.local/share/opencode/opencode-ocelot.db`). Config, plugins and auth are shared
-(`~/.config/opencode`, `~/.local/share/opencode/auth.json`).
+Push a change to `upstream.txt` or `revision.txt` on `main`. CI builds `linux-x64` and
+`darwin-arm64` and publishes a GitHub release for the new version.
 
-It never updates itself from upstream OpenCode.
+| Workflow | Runs | Does |
+|---|---|---|
+| `check` | every push and PR | all patches apply, and `patches/` matches what `export.sh` writes |
+| `release` | version change on `main` | builds both targets, publishes the release |
+| `bump` | Mondays, or manually | moves to the latest upstream release and opens a PR |
+
+## Credits
+
+Ocelot is built on [OpenCode](https://github.com/anomalyco/opencode) by the OpenCode team. The
+patch-and-release pipeline is inspired by [Helium](https://github.com/imputnet/helium).
