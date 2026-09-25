@@ -51,7 +51,12 @@ The server already does these for its HTTP routes; the plugin API doesn't expose
 Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 (watch maintainer draft #51095 first).
 
-- [ ] `parentID` on session create (workers become children of the leader).
+- [x] Child sessions: patch `core/child-sessions`. `parentID` on create (plugin API and HTTP; a child
+      lives at its parent's location unless one is given) and `child: true` on fork (same field as
+      #51095's `Forked.child`). opencode-octopi uses both and falls back on stock.
+      Note: after a restart the server resumes children only through a subagent job, so octopi
+      resumes its own stopped children.
+
 - [ ] Fork.
 - [ ] Compact.
 - [ ] Full message reads / list (drop the SQLite read).

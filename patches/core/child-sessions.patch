@@ -1,0 +1,422 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 25 Sep 2026 14:02:01 +0800
+Subject: core/session: let plugins and API clients create child sessions
+
+session.create accepts parentID (plugin API and HTTP), and session.fork
+accepts child: true to make the copy a child of its source. Children get
+the built-in subagent treatment: grouped under the parent, hidden from the
+session list, and reachable through the parent's subagent navigation.
+
+A child lives at its parent's location unless one is given explicitly, so
+a client can pass both parentID and location and still get the right
+location on servers that ignore parentID. An unknown parentID is a 404
+instead of a 500. The fork flag follows the maintainer draft #51095
+(Forked.child) so recorded events stay compatible if it lands.
+
+Ocelot-Patch: core/child-sessions
+
+diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
+index c44dc0730..375ea22ec 100644
+--- a/packages/client/src/effect/api/api.ts
++++ b/packages/client/src/effect/api/api.ts
+@@ -191,6 +191,7 @@ export type SessionCreateInput = {
+   readonly id?: Session.ID | undefined
+   readonly title?: string | undefined
+   readonly agent?: Agent.ID | undefined
++  readonly parentID?: Session.ID | undefined
+   readonly model?: Model.Ref | undefined
+   readonly location?: Location.PublicRef | undefined
+   readonly metadata?: Session.Metadata | undefined
+@@ -222,7 +223,11 @@ export type SessionRemoveInput = { readonly sessionID: Session.ID }
+ export type SessionRemoveOutput = void
+ export type SessionRemoveOperation<E = never> = (input: SessionRemoveInput) => Effect.Effect<SessionRemoveOutput, E>
+ 
+-export type SessionForkInput = { readonly sessionID: Session.ID; readonly before?: SessionMessage.ID | undefined }
++export type SessionForkInput = {
++  readonly sessionID: Session.ID
++  readonly before?: SessionMessage.ID | undefined
++  readonly child?: boolean | undefined
++}
+ export type SessionForkOutput = Session.Info
+ export type SessionForkOperation<E = never> = (input: SessionForkInput) => Effect.Effect<SessionForkOutput, E>
+ 
+@@ -589,6 +594,7 @@ export type SessionLogOutput =
+             readonly sessionID: Session.ID
+             readonly parentID: Session.ID
+             readonly boundary: Session.ForkBoundary
++            readonly child?: boolean | undefined
+             readonly instructions?:
+               | { readonly [x: string & Brand.Brand<"Instruction.Key">]: string & Brand.Brand<"Instruction.Hash"> }
+               | undefined
+diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
+index 4e1499c32..3450f794f 100644
+--- a/packages/client/src/effect/generated/client.ts
++++ b/packages/client/src/effect/generated/client.ts
+@@ -377,6 +377,7 @@ const EndpointSessionCreate = (raw: RawClient["server.session"]) => (input?: Ses
+         id: input?.["id"],
+         title: input?.["title"],
+         agent: input?.["agent"],
++        parentID: input?.["parentID"],
+         model: input?.["model"],
+         location: input?.["location"],
+         metadata: input?.["metadata"],
+@@ -429,7 +430,10 @@ const EndpointSessionRemove = (raw: RawClient["server.session"]) => (input: Sess
+ 
+ const EndpointSessionFork = (raw: RawClient["server.session"]) => (input: SessionForkInput) =>
+   preserveEffect<SessionForkOutput>()(
+-    raw["session.fork"]({ params: { sessionID: input["sessionID"] }, payload: { before: input["before"] } }).pipe(
++    raw["session.fork"]({
++      params: { sessionID: input["sessionID"] },
++      payload: { before: input["before"], child: input["child"] },
++    }).pipe(
+       Effect.mapError(mapClientError),
+       Effect.map((value) => value.data),
+     ),
+diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
+index 79cf0da92..97e215583 100644
+--- a/packages/client/src/promise/generated/client.ts
++++ b/packages/client/src/promise/generated/client.ts
+@@ -557,13 +557,14 @@ export function make(options: ClientOptions) {
+               id: input?.["id"],
+               title: input?.["title"],
+               agent: input?.["agent"],
++              parentID: input?.["parentID"],
+               model: input?.["model"],
+               location: input?.["location"],
+               metadata: input?.["metadata"],
+               permissions: input?.["permissions"],
+             },
+             successStatus: 200,
+-            declaredStatuses: [400, 401],
++            declaredStatuses: [400, 401, 404],
+             empty: false,
+           },
+           requestOptions,
+@@ -630,7 +631,7 @@ export function make(options: ClientOptions) {
+           {
+             method: "POST",
+             path: `/api/session/${encodeURIComponent(input.sessionID)}/fork`,
+-            body: { before: input["before"] },
++            body: { before: input["before"], child: input["child"] },
+             successStatus: 200,
+             declaredStatuses: [400, 401, 404],
+             empty: false,
+diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
+index afa029e04..63812dedb 100644
+--- a/packages/client/src/promise/generated/types.ts
++++ b/packages/client/src/promise/generated/types.ts
+@@ -1811,6 +1811,7 @@ export type SessionForked = {
+     sessionID: string
+     parentID: string
+     boundary: SessionForkBoundary
++    child?: boolean
+     instructions?: { [x: string]: string }
+     instructionEntries?: InstructionEntrySnapshot
+   }
+@@ -2867,6 +2868,7 @@ export type SessionCreateInput = {
+     readonly id?: string | null
+     readonly title?: string | null
+     readonly agent?: string | null
++    readonly parentID?: string | null
+     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+     readonly location?: { readonly directory: string } | null
+     readonly metadata?: { readonly [x: string]: JsonValue } | null
+@@ -2880,6 +2882,7 @@ export type SessionCreateInput = {
+     readonly id?: string | null
+     readonly title?: string | null
+     readonly agent?: string | null
++    readonly parentID?: string | null
+     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+     readonly location?: { readonly directory: string } | null
+     readonly metadata?: { readonly [x: string]: JsonValue } | null
+@@ -2893,6 +2896,7 @@ export type SessionCreateInput = {
+     readonly id?: string | null
+     readonly title?: string | null
+     readonly agent?: string | null
++    readonly parentID?: string | null
+     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+     readonly location?: { readonly directory: string } | null
+     readonly metadata?: { readonly [x: string]: JsonValue } | null
+@@ -2902,10 +2906,25 @@ export type SessionCreateInput = {
+       readonly effect: "allow" | "deny" | "ask"
+     }> | null
+   }["agent"]
++  readonly parentID?: {
++    readonly id?: string | null
++    readonly title?: string | null
++    readonly agent?: string | null
++    readonly parentID?: string | null
++    readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
++    readonly location?: { readonly directory: string } | null
++    readonly metadata?: { readonly [x: string]: JsonValue } | null
++    readonly permissions?: ReadonlyArray<{
++      readonly action: string
++      readonly resource: string
++      readonly effect: "allow" | "deny" | "ask"
++    }> | null
++  }["parentID"]
+   readonly model?: {
+     readonly id?: string | null
+     readonly title?: string | null
+     readonly agent?: string | null
++    readonly parentID?: string | null
+     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+     readonly location?: { readonly directory: string } | null
+     readonly metadata?: { readonly [x: string]: JsonValue } | null
+@@ -2919,6 +2938,7 @@ export type SessionCreateInput = {
+     readonly id?: string | null
+     readonly title?: string | null
+     readonly agent?: string | null
++    readonly parentID?: string | null
+     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+     readonly location?: { readonly directory: string } | null
+     readonly metadata?: { readonly [x: string]: JsonValue } | null
+@@ -2932,6 +2952,7 @@ export type SessionCreateInput = {
+     readonly id?: string | null
+     readonly title?: string | null
+     readonly agent?: string | null
++    readonly parentID?: string | null
+     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+     readonly location?: { readonly directory: string } | null
+     readonly metadata?: { readonly [x: string]: JsonValue } | null
+@@ -2945,6 +2966,7 @@ export type SessionCreateInput = {
+     readonly id?: string | null
+     readonly title?: string | null
+     readonly agent?: string | null
++    readonly parentID?: string | null
+     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+     readonly location?: { readonly directory: string } | null
+     readonly metadata?: { readonly [x: string]: JsonValue } | null
+@@ -3948,7 +3970,8 @@ export type SessionRemoveOutput = void
+ 
+ export type SessionForkInput = {
+   readonly sessionID: { readonly sessionID: string }["sessionID"]
+-  readonly before?: { readonly before?: string | undefined }["before"]
++  readonly before?: { readonly before?: string | undefined; readonly child?: boolean | undefined }["before"]
++  readonly child?: { readonly before?: string | undefined; readonly child?: boolean | undefined }["child"]
+ }
+ 
+ export type SessionForkOutput = { data: SessionInfo }["data"]
+diff --git a/packages/core/src/plugin/host.ts b/packages/core/src/plugin/host.ts
+index a2aee2865..dd4bd996e 100644
+--- a/packages/core/src/plugin/host.ts
++++ b/packages/core/src/plugin/host.ts
+@@ -525,8 +525,13 @@ export const make = Effect.fn("PluginHost.make")(function* (
+           model: input?.model,
+           metadata: input?.metadata,
+           permissions: input?.permissions,
+-          location:
+-            input?.location ?? Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID }),
++          ...(input?.parentID
++            ? { parentID: input.parentID, location: input.location }
++            : {
++                location:
++                  input?.location ??
++                  Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID }),
++              }),
+         }),
+       get: (input) => sessions.get(input.sessionID),
+       switchAgent: sessions.switchAgent,
+diff --git a/packages/core/src/session.ts b/packages/core/src/session.ts
+index 253661d08..90e9fc474 100644
+--- a/packages/core/src/session.ts
++++ b/packages/core/src/session.ts
+@@ -87,14 +87,17 @@ type CreateBaseInput = {
+   metadata?: SessionSchema.Metadata
+   permissions?: Permission.Ruleset
+ }
++// A child lives at its parent's location unless one is given.
+ type CreateInput = CreateBaseInput &
+-  ({ location: Location.Ref; parentID?: never } | { parentID: SessionSchema.ID; location?: never })
++  ({ location: Location.Ref; parentID?: SessionSchema.ID } | { parentID: SessionSchema.ID; location?: Location.Ref })
+ 
+ type CompactInput = Parameters<Session.Handle["compact"]>[0] & { sessionID: SessionSchema.ID }
+ 
+ type ForkInput = {
+   sessionID: SessionSchema.ID
+   before?: SessionMessage.ID
++  /** Makes the fork a child of the source session instead of a top-level session. */
++  child?: boolean
+ }
+ 
+ export {
+@@ -253,7 +256,7 @@ const layer = Layer.effect(
+         if (recorded) return recorded
+         const parent = input.parentID ? yield* store.get(input.parentID) : undefined
+         if (input.parentID && parent === undefined) return yield* new NotFoundError({ sessionID: input.parentID })
+-        const location = parent?.location ?? input.location
++        const location = input.location ?? parent?.location
+         if (location === undefined)
+           return yield* Effect.die(new Error("Session.create requires either location or an existing parentID"))
+         const project = yield* projects.resolve(location.directory)
+@@ -341,6 +344,7 @@ const layer = Layer.effect(
+           sessionID,
+           parentID: parent.id,
+           boundary: { type: input.before ? "before" : "through", messageID: boundary.id },
++          ...(input.child ? { child: true } : {}),
+           ...inherited,
+         })
+         return yield* result.get(sessionID).pipe(Effect.orDie)
+diff --git a/packages/core/src/session/projector.ts b/packages/core/src/session/projector.ts
+index f3b5ec439..f49ddb473 100644
+--- a/packages/core/src/session/projector.ts
++++ b/packages/core/src/session/projector.ts
+@@ -148,7 +148,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
+     .insert(SessionTable)
+     .values({
+       id: event.data.sessionID,
+-      parent_id: null,
++      parent_id: event.data.child ? event.data.parentID : null,
+       fork_session_id: event.data.parentID,
+       fork_boundary: event.data.boundary,
+       project_id: parent.project_id,
+diff --git a/packages/core/test/session-create.test.ts b/packages/core/test/session-create.test.ts
+index edb83d48f..5a2d687d4 100644
+--- a/packages/core/test/session-create.test.ts
++++ b/packages/core/test/session-create.test.ts
+@@ -93,8 +93,6 @@ const logEvents = (session: Session.Interface, sessionID: Session.ID, follow?: b
+ const assertCreateInputTypes = (session: Session.Interface) => {
+   // @ts-expect-error location or parentID is required.
+   session.create({})
+-  // @ts-expect-error child sessions inherit their parent's location.
+-  session.create({ parentID: Session.ID.create(), location })
+ }
+ void assertCreateInputTypes
+ 
+@@ -444,6 +442,33 @@ describe("Session.create", () => {
+     }),
+   )
+ 
++  it.effect("places a child at an explicit location", () =>
++    Effect.gen(function* () {
++      const session = yield* Session.Service
++      const parent = yield* session.create({ location })
++      const elsewhere = Location.Ref.make({ directory: AbsolutePath.make("/project/sub") })
++      const child = yield* session.create({ parentID: parent.id, location: elsewhere })
++
++      expect(child).toMatchObject({ parentID: parent.id, location: elsewhere })
++    }),
++  )
++
++  it.effect("forks into a child of the source session", () =>
++    Effect.gen(function* () {
++      const session = yield* Session.Service
++      const { db } = yield* Database.Service
++      const bus = yield* Bus.Service
++      const parent = yield* session.create({ location })
++      yield* session.prompt({ sessionID: parent.id, text: "Fork context", resume: false })
++      yield* SessionInbox.promote(db, bus, parent.id, "steer")
++
++      const child = yield* session.fork({ sessionID: parent.id, child: true })
++      expect(child).toMatchObject({ parentID: parent.id, fork: { sessionID: parent.id } })
++      expect((yield* session.list({ parentID: parent.id })).data.map((item) => item.id)).toEqual([child.id])
++      expect((yield* session.fork({ sessionID: parent.id })).parentID).toBeUndefined()
++    }),
++  )
++
+   it.effect("rejects child creation when the parent does not exist", () =>
+     Effect.gen(function* () {
+       const session = yield* Session.Service
+diff --git a/packages/protocol/src/groups/session.ts b/packages/protocol/src/groups/session.ts
+index e0ce88796..9ff239964 100644
+--- a/packages/protocol/src/groups/session.ts
++++ b/packages/protocol/src/groups/session.ts
+@@ -222,17 +222,20 @@ export const makeSessionGroup = <
+           id: Session.ID.pipe(Schema.optional),
+           title: Schema.String.pipe(Schema.optional),
+           agent: Agent.ID.pipe(Schema.optional),
++          parentID: Session.ID.pipe(Schema.optional),
+           model: Model.Ref.pipe(Schema.optional),
+           location: Location.PublicRef.pipe(Schema.optional),
+           metadata: Session.Metadata.pipe(Schema.optional),
+           permissions: Permission.Ruleset.pipe(Schema.optional),
+         }),
+         success: Schema.Struct({ data: PublicSessionInfo }),
++        error: SessionNotFoundError,
+       }).annotateMerge(
+         OpenApi.annotations({
+           identifier: "session.create",
+           summary: "Create session",
+-          description: "Create a session at the requested location.",
++          description:
++            "Create a session at the requested location. Set parentID to create a child of that session; it lives at the parent's location unless one is given.",
+         }),
+       ),
+     )
+@@ -308,7 +311,10 @@ export const makeSessionGroup = <
+     .add(
+       HttpApiEndpoint.post("session.fork", "/api/session/:sessionID/fork", {
+         params: { sessionID: Session.ID },
+-        payload: Schema.Struct({ before: SessionMessage.ID.pipe(Schema.optional) }),
++        payload: Schema.Struct({
++          before: SessionMessage.ID.pipe(Schema.optional),
++          child: Schema.Boolean.pipe(Schema.optional),
++        }),
+         success: Schema.Struct({ data: PublicSessionInfo }),
+         error: [SessionNotFoundError, MessageNotFoundError, InvalidRequestError],
+       })
+@@ -318,7 +324,7 @@ export const makeSessionGroup = <
+             identifier: "session.fork",
+             summary: "Fork session",
+             description:
+-              "Create a child session by copying projected history before a message. Omit before to copy the full history.",
++              "Create a session by copying projected history before a message. Omit before to copy the full history. Set child to make the copy a child of this session.",
+           }),
+         ),
+     )
+diff --git a/packages/schema/src/session-event.ts b/packages/schema/src/session-event.ts
+index 79be9aaf4..424436969 100644
+--- a/packages/schema/src/session-event.ts
++++ b/packages/schema/src/session-event.ts
+@@ -197,6 +197,8 @@ export const Forked = Event.durable({
+     ...Base,
+     parentID: SessionID,
+     boundary: SessionFork.Boundary,
++    /** The fork is a child of its source session, such as a forked subagent. */
++    child: Schema.Boolean.pipe(optional),
+     instructions: Instruction.Values.pipe(optional),
+     instructionEntries: InstructionEntry.Snapshot.pipe(optional),
+   },
+diff --git a/packages/server/src/handlers/session.ts b/packages/server/src/handlers/session.ts
+index b95fbe454..b53598968 100644
+--- a/packages/server/src/handlers/session.ts
++++ b/packages/server/src/handlers/session.ts
+@@ -133,9 +133,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
+                 model: ctx.payload.model,
+                 metadata: ctx.payload.metadata,
+                 permissions: ctx.payload.permissions,
+-                location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
++                ...(ctx.payload.parentID
++                  ? { parentID: ctx.payload.parentID, location: ctx.payload.location }
++                  : { location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) } }),
+               })
+-              .pipe(Effect.orDie),
++              .pipe(Effect.catchTag("Session.NotFoundError", missingSession)),
+           }
+         }),
+       )
+@@ -223,14 +225,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
+         "session.fork",
+         Effect.fn(function* (ctx) {
+           return {
+-            data: yield* session.fork({ sessionID: ctx.params.sessionID, before: ctx.payload.before }).pipe(
+-              Effect.catchTag("Session.NotFoundError", missingSession),
+-              Effect.catchTag("Session.MessageNotFoundError", missingMessage),
+-              Effect.catchTag(
+-                "Session.ForkEmptyError",
+-                (error) => new InvalidRequestError({ message: error.message, kind: "empty_session" }),
++            data: yield* session
++              .fork({ sessionID: ctx.params.sessionID, before: ctx.payload.before, child: ctx.payload.child })
++              .pipe(
++                Effect.catchTag("Session.NotFoundError", missingSession),
++                Effect.catchTag("Session.MessageNotFoundError", missingMessage),
++                Effect.catchTag(
++                  "Session.ForkEmptyError",
++                  (error) => new InvalidRequestError({ message: error.message, kind: "empty_session" }),
++                ),
+               ),
+-            ),
+           }
+         }),
+       )

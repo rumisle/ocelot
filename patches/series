@@ -8,3 +8,4 @@ core/subscription-cost.patch
 core/first-output-time.patch
 web/turn-stats.patch
 web/working-timer.patch
+core/child-sessions.patch
