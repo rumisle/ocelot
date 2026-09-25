@@ -96,8 +96,12 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 - [ ] General way for plugins to add UI to the web app (upstream only has TUI plugin slots).
       First users: cache-warmer status/tips like pi's (cache expiry countdown, warm now),
       octopi's fleet.
-- [ ] Custom renderers for tool calls, so e.g. `tools.octopi.*` calls in Code Mode render as
-      worker cards (name, model, status, result) instead of raw code + JSON.
+- [x] Worker cards for octopi: patches `core/codemode-child-sessions` (Code Mode rows record the
+      child sessions nested calls name in metadata `sessionID`/`sessionIDs`) and
+      `web/child-session-cards` (the subagent card under the execute row; tap opens the live
+      transcript). No octopi-specific code in ocelot.
+- [ ] Custom renderers for tool calls in general (plugin-provided), e.g. showing a worker's model
+      and result on its card.
 
 ### General
 - [ ] The web UI has many small bugs; collect them here as we hit them.
