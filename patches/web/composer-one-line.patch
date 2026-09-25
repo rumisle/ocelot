@@ -517,3 +517,18 @@ index bec7da700..930a07fe2 100644
              <Menu.Item onSelect={props.onAttach} shortcut={props.attachShortcut}>
                {props.attachLabel}
              </Menu.Item>
+diff --git a/packages/ui/src/i18n/en.ts b/packages/ui/src/i18n/en.ts
+index f5f68b39d..8af5fbf46 100644
+--- a/packages/ui/src/i18n/en.ts
++++ b/packages/ui/src/i18n/en.ts
+@@ -154,8 +154,8 @@ const source = {
+   "ui.promptInput.uploading": "{{percent}}%",
+   "ui.promptInput.label": "Prompt",
+   "ui.promptInput.placeholder.shell": "Enter shell command…",
+-  "ui.promptInput.placeholder.normal": "Ask anything, {{slash}} for commands, {{at}} for context…",
+-  "ui.promptInput.placeholder.followUp": "Add follow-up, {{slash}} for commands, {{at}} for context…",
++  "ui.promptInput.placeholder.normal": "Ask anything…",
++  "ui.promptInput.placeholder.followUp": "Add follow-up…",
+   "ui.promptInput.add": "Add images and files",
+   "ui.promptInput.attachments": "Images and files",
+   "ui.promptInput.context": "Context",
