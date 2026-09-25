@@ -10,7 +10,9 @@ After a turn finishes, the line under the reply reads e.g.
 "1m 14s · ttft 480ms · 42 t/s · 95% cache · $0.23":
 - the duration, as before;
 - time to first token and tokens per second of the last model call that produced
-  output (from time.output, patch core/first-output-time);
+  output (from time.output, patch core/first-output-time). t/s is left out when
+  the output took under a second: providers sometimes deliver a short reply in one
+  burst, which would read as thousands of tokens per second;
 - the share of prompt tokens read from the cache and the cost, summed over every
   step of the turn. Cost is left out when the model has no prices.
 Short labels so it fits one line on a phone.
@@ -99,10 +101,10 @@ index ee7b53c2b..16a5c6386 100644
    id: string
    content: SessionMessageAssistantReasoning
 diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
-index ee677260e..c2b2daaca 100644
+index ee677260e..684d65cbd 100644
 --- a/packages/session-ui/src/timeline/session-timeline-row.tsx
 +++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
-@@ -104,6 +104,31 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -104,6 +104,34 @@ export function createSessionTimelineRowRenderer(input: {
      if (completed === undefined || completed < user.time.created) return undefined
      return completed - user.time.created
    }
@@ -124,17 +126,20 @@ index ee677260e..c2b2daaca 100644
 +    const output = last?.time.output
 +    const end = last?.time.streamed ?? last?.time.completed
 +    const generated = last?.tokens ? last.tokens.output + last.tokens.reasoning : 0
++    // Providers sometimes deliver a short reply in one burst (97 tokens in 3ms), so a
++    // window under a second says nothing about speed; leave t/s out then.
++    const window = output !== undefined && end !== undefined ? end - output : 0
 +    return {
 +      cost,
 +      cacheHit: prompt > 0 ? cached / prompt : undefined,
 +      ttft: last && output !== undefined ? output - last.time.created : undefined,
-+      tps: output !== undefined && end !== undefined && end - output > 0 ? generated / ((end - output) / 1000) : undefined,
++      tps: window >= 1000 && generated > 0 ? generated / (window / 1000) : undefined,
 +    }
 +  }
    const copyContentID = (messageID: string) => {
      if (workingTurn(messageID)) return null
      const message = input.projection
-@@ -276,6 +301,7 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -276,6 +304,7 @@ export function createSessionTimelineRowRenderer(input: {
                  contentID={ref()!.partID}
                  showAssistantCopyPartID={copyContentID(row().userMessageID)}
                  turnDurationMs={duration(row().userMessageID)}
