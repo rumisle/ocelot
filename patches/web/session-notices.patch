@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 26 Sep 2026 00:49:00 +0800
+Subject: session-ui/timeline: plugin notices
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plugin notices (patch core/session-notices) render like the other timeline notices,
+"Headline · details" split at the first " · ". Warnings are tinted and stay out of the
+"Updates" group, so a cache miss shows even when notices are grouped.
+
+Ocelot-Patch: web/session-notices
+
+diff --git a/packages/session-ui/src/timeline/projection.ts b/packages/session-ui/src/timeline/projection.ts
+index effcaa9ba..9f899944e 100644
+--- a/packages/session-ui/src/timeline/projection.ts
++++ b/packages/session-ui/src/timeline/projection.ts
+@@ -271,7 +271,13 @@ export namespace Timeline {
+             detail,
+             new Set(
+               messages
+-                .filter((message) => message.type === "compaction" || message.type === "model-switched")
++                .filter(
++                  (message) =>
++                    message.type === "compaction" ||
++                    message.type === "model-switched" ||
++                    // ocelot: warnings from plugins (e.g. cache misses) stay out of the "Updates" group.
++                    (message.type === "notice" && message.level === "warning"),
++                )
+                 .map((message) => message.id),
+             ),
+           )
+diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
+index 684d65cbd..36dd5c388 100644
+--- a/packages/session-ui/src/timeline/session-timeline-row.tsx
++++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
+@@ -343,6 +343,11 @@ export function createSessionTimelineRowRenderer(input: {
+           : capitalizeAgent(message.agent),
+       }
+     if (message.type === "model-switched") return undefined
++    // ocelot: plugin notices read "Headline · details", like the other notices.
++    if (message.type === "notice") {
++      const [label, ...rest] = message.text.split(" · ")
++      return { label, data: rest.join(" · ") || undefined }
++    }
+     if (message.type === "skill") return { label: i18n.t("ui.tool.skill"), data: message.name }
+     if (message.type === "system") {
+       const sources = Array.isArray(message.metadata?.instructionSources)
+@@ -419,6 +424,10 @@ export function createSessionTimelineRowRenderer(input: {
+       if (value?.status !== "failed") return ""
+       return unwrapErrorMessage(value.error.message)
+     })
++    const level = createMemo(() => {
++      const value = message()
++      return value?.type === "notice" ? value.level : undefined
++    })
+     const moved = createMemo(() => {
+       const value = message()
+       return value?.type === "location-switched" ? value : undefined
+@@ -492,7 +501,11 @@ export function createSessionTimelineRowRenderer(input: {
+                           component={href() ? "a" : "div"}
+                           data-slot="session-timeline-notice"
+                           class={`block w-full truncate ${props.grouped ? "py-1" : "pt-3 pb-1"} text-13-regular leading-text-compact text-text-weak ${inset()}`}
+-                          classList={{ "cursor-pointer": clickable() }}
++                          classList={{
++                            "cursor-pointer": clickable(),
++                            "text-v2-state-fg-warning": level() === "warning",
++                          }}
++                          data-level={level()}
+                           href={href()}
+                           role={clickable() && !href() ? "link" : undefined}
+                           tabIndex={clickable() && !href() ? 0 : undefined}

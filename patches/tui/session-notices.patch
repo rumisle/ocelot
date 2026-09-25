@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 26 Sep 2026 00:49:00 +0800
+Subject: tui/session: plugin notices
+
+Plugin notices (patch core/session-notices) render as a notice row, warnings in the
+warning color, and live updates append them.
+
+Ocelot-Patch: tui/session-notices
+
+diff --git a/packages/tui/src/routes/session/index.tsx b/packages/tui/src/routes/session/index.tsx
+index 50970ddbb..94111c6c8 100644
+--- a/packages/tui/src/routes/session/index.tsx
++++ b/packages/tui/src/routes/session/index.tsx
+@@ -1766,7 +1766,12 @@ function SessionMessageView(props: { message: SessionMessageInfo }) {
+         <SessionSwitchMessageV2 message={props.message} />
+       </Match>
+       <Match
+-        when={props.message.type === "system" || props.message.type === "synthetic" || props.message.type === "skill"}
++        when={
++          props.message.type === "system" ||
++          props.message.type === "synthetic" ||
++          props.message.type === "skill" ||
++          props.message.type === "notice"
++        }
+       >
+         <Show when={props.message.type === "skill"} fallback={<SessionNoticeMessageV2 message={props.message} />}>
+           <SessionSkillMessage message={props.message as Extract<SessionMessageInfo, { type: "skill" }>} />
+@@ -1914,6 +1919,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
+   const text = () => {
+     if (props.message.type === "system") return props.message.description ?? "Instructions updated"
+     if (props.message.type === "synthetic") return props.message.description ?? ""
++    if (props.message.type === "notice") return props.message.text
+     return ""
+   }
+   const description = () => (source() === "shell" ? text().replace(/\s+/g, " ").trim() : text())
+@@ -1934,7 +1940,16 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
+     <Show
+       when={completion()}
+       fallback={
+-        <InlineToolRow icon="◈" color={theme.text.muted} pending="Notice" complete={true}>
++        <InlineToolRow
++          icon="◈"
++          color={
++            props.message.type === "notice" && props.message.level === "warning"
++              ? theme.text.feedback.warning.base
++              : theme.text.muted
++          }
++          pending="Notice"
++          complete={true}
++        >
+           {text()}
+         </InlineToolRow>
+       }
+diff --git a/packages/tui/src/routes/session/rows.ts b/packages/tui/src/routes/session/rows.ts
+index e6d81781d..14f54169e 100644
+--- a/packages/tui/src/routes/session/rows.ts
++++ b/packages/tui/src/routes/session/rows.ts
+@@ -251,6 +251,10 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
+         appendMessage(event.id.replace(/^evt_/, "msg_"))
+     }),
+     data.on("session.shell.started", message),
++    // ocelot: plugin notices carry their own id (re-publishing replaces the notice).
++    data.on("session.notice", (event) => {
++      if (event.data.sessionID === sessionID()) appendMessage(event.data.id)
++    }),
+     data.on("session.agent.selected", message),
+     data.on("session.model.selected", message),
+     data.on("session.text.delta", (event) => {

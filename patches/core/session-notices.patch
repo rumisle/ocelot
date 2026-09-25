@@ -1,0 +1,1186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 26 Sep 2026 00:49:00 +0800
+Subject: core/session: notices from plugins in the transcript
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A new transcript message type, notice ({source, level: info|warning, text}), that is never
+sent to the model and never compacted, like the model and agent switch markers. Plugins
+post one with ctx.session.notice (HTTP: POST /api/session/:id/notice) and get its id back;
+posting again with that id replaces the notice in place. A notice may carry usage
+({cost, tokens}), which counts toward the session's cost and tokens like
+session.usage.recorded (pi's usage entries for cache warming work the same way).
+
+First user: opencode-cache-warmer ("Cache kept warm · 3 refreshes · $0.09", and
+"Cache miss after 7m idle · 150k tokens re-billed · ~$0.72" as a warning).
+
+Client types and openapi.json are regenerated (openapi.json was already stale).
+
+Ocelot-Patch: core/session-notices
+
+diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
+index 375ea22ec..dd3c6929c 100644
+--- a/packages/client/src/effect/api/api.ts
++++ b/packages/client/src/effect/api/api.ts
+@@ -252,6 +252,27 @@ export type SessionUpdateInput = {
+ export type SessionUpdateOutput = void
+ export type SessionUpdateOperation<E = never> = (input: SessionUpdateInput) => Effect.Effect<SessionUpdateOutput, E>
+ 
++export type SessionNoticeInput = {
++  readonly sessionID: Session.ID
++  readonly id?: SessionMessage.ID | undefined
++  readonly source: string
++  readonly level?: "info" | "warning" | undefined
++  readonly text: string
++  readonly usage?:
++    | {
++        readonly cost: number & Brand.Brand<"Money.USD">
++        readonly tokens: {
++          readonly input: number
++          readonly output: number
++          readonly reasoning: number
++          readonly cache: { readonly read: number; readonly write: number }
++        }
++      }
++    | undefined
++}
++export type SessionNoticeOutput = { readonly id: SessionMessage.ID }
++export type SessionNoticeOperation<E = never> = (input: SessionNoticeInput) => Effect.Effect<SessionNoticeOutput, E>
++
+ export type SessionMoveInput = {
+   readonly sessionID: Session.ID
+   readonly directory: AbsolutePath
+@@ -764,6 +785,37 @@ export type SessionLogOutput =
+             readonly metadata?: { readonly [x: string]: unknown } | undefined
+           }
+         }
++      | {
++          readonly id: Event.ID
++          readonly created: number
++          readonly metadata?: { readonly [x: string]: unknown } | undefined
++          readonly type: "session.notice"
++          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
++          readonly location?:
++            | {
++                readonly directory: AbsolutePath
++                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
++              }
++            | undefined
++          readonly data: {
++            readonly sessionID: Session.ID
++            readonly id: SessionMessage.ID
++            readonly source: string
++            readonly level: "info" | "warning"
++            readonly text: string
++            readonly usage?:
++              | {
++                  readonly cost: number & Brand.Brand<"Money.USD">
++                  readonly tokens: {
++                    readonly input: number
++                    readonly output: number
++                    readonly reasoning: number
++                    readonly cache: { readonly read: number; readonly write: number }
++                  }
++                }
++              | undefined
++          }
++        }
+       | {
+           readonly id: Event.ID
+           readonly created: number
+@@ -1422,6 +1474,7 @@ export interface SessionApi<E = never> {
+   readonly switchAgent: SessionSwitchAgentOperation<E>
+   readonly switchModel: SessionSwitchModelOperation<E>
+   readonly update: SessionUpdateOperation<E>
++  readonly notice: SessionNoticeOperation<E>
+   readonly move: SessionMoveOperation<E>
+   readonly prompt: SessionPromptOperation<E>
+   readonly command: SessionCommandOperation<E>
+@@ -1481,6 +1534,7 @@ export type MessageListInput = {
+     | "shell"
+     | "assistant"
+     | "compaction"
++    | "notice"
+     | undefined
+ }
+ export type MessageListOutput = {
+diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
+index 3450f794f..95afdbd67 100644
+--- a/packages/client/src/effect/generated/client.ts
++++ b/packages/client/src/effect/generated/client.ts
+@@ -42,6 +42,8 @@ import type {
+   SessionSwitchModelOutput,
+   SessionUpdateInput,
+   SessionUpdateOutput,
++  SessionNoticeInput,
++  SessionNoticeOutput,
+   SessionMoveInput,
+   SessionMoveOutput,
+   SessionPromptInput,
+@@ -461,6 +463,23 @@ const EndpointSessionUpdate = (raw: RawClient["server.session"]) => (input: Sess
+     }).pipe(Effect.mapError(mapClientError)),
+   )
+ 
++const EndpointSessionNotice = (raw: RawClient["server.session"]) => (input: SessionNoticeInput) =>
++  preserveEffect<SessionNoticeOutput>()(
++    raw["session.notice"]({
++      params: { sessionID: input["sessionID"] },
++      payload: {
++        id: input["id"],
++        source: input["source"],
++        level: input["level"],
++        text: input["text"],
++        usage: input["usage"],
++      },
++    }).pipe(
++      Effect.mapError(mapClientError),
++      Effect.map((value) => value.data),
++    ),
++  )
++
+ const EndpointSessionMove = (raw: RawClient["server.session"]) => (input: SessionMoveInput) =>
+   preserveEffect<SessionMoveOutput>()(
+     raw["session.move"]({
+@@ -754,6 +773,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
+   switchAgent: EndpointSessionSwitchAgent(raw),
+   switchModel: EndpointSessionSwitchModel(raw),
+   update: EndpointSessionUpdate(raw),
++  notice: EndpointSessionNotice(raw),
+   move: EndpointSessionMove(raw),
+   prompt: EndpointSessionPrompt(raw),
+   command: EndpointSessionCommand(raw),
+diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
+index 97e215583..eb77a2aeb 100644
+--- a/packages/client/src/promise/generated/client.ts
++++ b/packages/client/src/promise/generated/client.ts
+@@ -36,6 +36,8 @@ import type {
+   SessionSwitchModelOutput,
+   SessionUpdateInput,
+   SessionUpdateOutput,
++  SessionNoticeInput,
++  SessionNoticeOutput,
+   SessionMoveInput,
+   SessionMoveOutput,
+   SessionPromptInput,
+@@ -674,6 +676,24 @@ export function make(options: ClientOptions) {
+           },
+           requestOptions,
+         ),
++      notice: (input: SessionNoticeInput, requestOptions?: RequestOptions) =>
++        request<{ readonly data: SessionNoticeOutput }>(
++          {
++            method: "POST",
++            path: `/api/session/${encodeURIComponent(input.sessionID)}/notice`,
++            body: {
++              id: input["id"],
++              source: input["source"],
++              level: input["level"],
++              text: input["text"],
++              usage: input["usage"],
++            },
++            successStatus: 200,
++            declaredStatuses: [400, 401, 404],
++            empty: false,
++          },
++          requestOptions,
++        ).then((value) => value.data),
+       move: (input: SessionMoveInput, requestOptions?: RequestOptions) =>
+         request<SessionMoveOutput>(
+           {
+diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
+index 63812dedb..2e35667de 100644
+--- a/packages/client/src/promise/generated/types.ts
++++ b/packages/client/src/promise/generated/types.ts
+@@ -159,6 +159,16 @@ export type SessionMessageIdle = {
+   outcome: "succeeded" | "failed" | "interrupted"
+ }
+ 
++export type SessionMessageNotice = {
++  id: string
++  metadata?: { [x: string]: JsonValue }
++  time: { created: number }
++  type: "notice"
++  source: string
++  level: "info" | "warning"
++  text: string
++}
++
+ export type SessionActive = { type: "running" }
+ 
+ export type SessionInboxDelivery = "steer" | "queue"
+@@ -698,6 +708,23 @@ export type SessionSynthetic = {
+   data: { sessionID: string; text: string; description?: string; metadata?: { [x: string]: any } }
+ }
+ 
++export type SessionNotice = {
++  id: string
++  created: number
++  metadata?: { [x: string]: any }
++  type: "session.notice"
++  durable: { aggregateID: string; seq: number; version: 1 }
++  location?: LocationRef
++  data: {
++    sessionID: string
++    id: string
++    source: string
++    level: "info" | "warning"
++    text: string
++    usage?: { cost: MoneyUSD; tokens: TokenUsageInfo }
++  }
++}
++
+ export type SessionSkillActivated = {
+   id: string
+   created: number
+@@ -2280,6 +2307,7 @@ export type SessionMessageInfo =
+   | SessionMessageAssistant
+   | SessionMessageCompaction
+   | SessionMessageIdle
++  | SessionMessageNotice
+ 
+ export type SessionMessageContentUpdated = {
+   id: string
+@@ -2334,6 +2362,7 @@ export type SessionEventDurable =
+   | SessionExecutionInterrupted
+   | SessionInstructionsUpdated
+   | SessionSynthetic
++  | SessionNotice
+   | SessionSkillActivated
+   | SessionShellStarted
+   | SessionShellEnded
+@@ -2398,6 +2427,7 @@ export type V2Event =
+   | SessionExecutionInterrupted
+   | SessionInstructionsUpdated
+   | SessionSynthetic
++  | SessionNotice
+   | SessionSkillActivated
+   | SessionShellStarted
+   | SessionShellEnded
+@@ -3300,6 +3330,15 @@ export type SessionImportInput = {
+           readonly type: "idle"
+           readonly outcome: "succeeded" | "failed" | "interrupted"
+         }
++      | {
++          readonly id: string
++          readonly metadata?: { readonly [x: string]: JsonValue }
++          readonly time: { readonly created: number }
++          readonly type: "notice"
++          readonly source: string
++          readonly level: "info" | "warning"
++          readonly text: string
++        }
+     >
+     readonly location?: { readonly directory: string } | null
+   }["info"]
+@@ -3622,6 +3661,15 @@ export type SessionImportInput = {
+           readonly type: "idle"
+           readonly outcome: "succeeded" | "failed" | "interrupted"
+         }
++      | {
++          readonly id: string
++          readonly metadata?: { readonly [x: string]: JsonValue }
++          readonly time: { readonly created: number }
++          readonly type: "notice"
++          readonly source: string
++          readonly level: "info" | "warning"
++          readonly text: string
++        }
+     >
+     readonly location?: { readonly directory: string } | null
+   }["messages"]
+@@ -3944,6 +3992,15 @@ export type SessionImportInput = {
+           readonly type: "idle"
+           readonly outcome: "succeeded" | "failed" | "interrupted"
+         }
++      | {
++          readonly id: string
++          readonly metadata?: { readonly [x: string]: JsonValue }
++          readonly time: { readonly created: number }
++          readonly type: "notice"
++          readonly source: string
++          readonly level: "info" | "warning"
++          readonly text: string
++        }
+     >
+     readonly location?: { readonly directory: string } | null
+   }["location"]
+@@ -4019,6 +4076,87 @@ export type SessionUpdateInput = {
+ 
+ export type SessionUpdateOutput = void
+ 
++export type SessionNoticeInput = {
++  readonly sessionID: { readonly sessionID: string }["sessionID"]
++  readonly id?: {
++    readonly id?: string | null
++    readonly source: string
++    readonly level?: "info" | "warning" | null
++    readonly text: string
++    readonly usage?: {
++      readonly cost: number
++      readonly tokens: {
++        readonly input: number
++        readonly output: number
++        readonly reasoning: number
++        readonly cache: { readonly read: number; readonly write: number }
++      }
++    }
++  }["id"]
++  readonly source: {
++    readonly id?: string | null
++    readonly source: string
++    readonly level?: "info" | "warning" | null
++    readonly text: string
++    readonly usage?: {
++      readonly cost: number
++      readonly tokens: {
++        readonly input: number
++        readonly output: number
++        readonly reasoning: number
++        readonly cache: { readonly read: number; readonly write: number }
++      }
++    }
++  }["source"]
++  readonly level?: {
++    readonly id?: string | null
++    readonly source: string
++    readonly level?: "info" | "warning" | null
++    readonly text: string
++    readonly usage?: {
++      readonly cost: number
++      readonly tokens: {
++        readonly input: number
++        readonly output: number
++        readonly reasoning: number
++        readonly cache: { readonly read: number; readonly write: number }
++      }
++    }
++  }["level"]
++  readonly text: {
++    readonly id?: string | null
++    readonly source: string
++    readonly level?: "info" | "warning" | null
++    readonly text: string
++    readonly usage?: {
++      readonly cost: number
++      readonly tokens: {
++        readonly input: number
++        readonly output: number
++        readonly reasoning: number
++        readonly cache: { readonly read: number; readonly write: number }
++      }
++    }
++  }["text"]
++  readonly usage?: {
++    readonly id?: string | null
++    readonly source: string
++    readonly level?: "info" | "warning" | null
++    readonly text: string
++    readonly usage?: {
++      readonly cost: number
++      readonly tokens: {
++        readonly input: number
++        readonly output: number
++        readonly reasoning: number
++        readonly cache: { readonly read: number; readonly write: number }
++      }
++    }
++  }["usage"]
++}
++
++export type SessionNoticeOutput = { data: { id: string } }["data"]
++
+ export type SessionMoveInput = {
+   readonly sessionID: { readonly sessionID: string }["sessionID"]
+   readonly directory: { readonly directory: string; readonly delivery?: ("steer" | "queue") | undefined }["directory"]
+@@ -5427,6 +5565,7 @@ export type MessageListInput = {
+       | "shell"
+       | "assistant"
+       | "compaction"
++      | "notice"
+       | undefined
+   }["limit"]
+   readonly order?: {
+@@ -5444,6 +5583,7 @@ export type MessageListInput = {
+       | "shell"
+       | "assistant"
+       | "compaction"
++      | "notice"
+       | undefined
+   }["order"]
+   readonly cursor?: {
+@@ -5461,6 +5601,7 @@ export type MessageListInput = {
+       | "shell"
+       | "assistant"
+       | "compaction"
++      | "notice"
+       | undefined
+   }["cursor"]
+   readonly type?: {
+@@ -5478,6 +5619,7 @@ export type MessageListInput = {
+       | "shell"
+       | "assistant"
+       | "compaction"
++      | "notice"
+       | undefined
+   }["type"]
+ }
+diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
+index 31257b811..f1f6b256d 100644
+--- a/packages/client/src/solid/data.ts
++++ b/packages/client/src/solid/data.ts
+@@ -816,6 +816,26 @@ export function createData(config: CreateDataInput) {
+           time: { created: event.created },
+         })
+         return
++      // ocelot: plugin notices; the same id replaces the notice in place (like the projector).
++      case "session.notice":
++        message.update(event.data.sessionID, (draft, index) => {
++          const position = index.get(event.data.id)
++          const current = position === undefined ? undefined : draft[position]
++          if (current?.type === "notice") {
++            Object.assign(current, { source: event.data.source, level: event.data.level, text: event.data.text })
++            return
++          }
++          message.append(draft, index, {
++            id: event.data.id,
++            type: "notice",
++            source: event.data.source,
++            level: event.data.level,
++            text: event.data.text,
++            metadata: event.metadata,
++            time: { created: event.created },
++          })
++        })
++        return
+       case "session.shell.started":
+         message.insert(event.data.sessionID, {
+           id: messageIDFromEvent(event.id),
+diff --git a/packages/core/src/plugin/host.ts b/packages/core/src/plugin/host.ts
+index dd4bd996e..f4d4f3d53 100644
+--- a/packages/core/src/plugin/host.ts
++++ b/packages/core/src/plugin/host.ts
+@@ -547,6 +547,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
+       }),
+       move: sessions.move,
+       synthetic: sessions.synthetic,
++      notice: sessions.notice,
+       interrupt: (input) =>
+         sessions
+           .interrupt(input.sessionID, { resume: input.resume })
+diff --git a/packages/core/src/session.ts b/packages/core/src/session.ts
+index 90e9fc474..c2c2fd73d 100644
+--- a/packages/core/src/session.ts
++++ b/packages/core/src/session.ts
+@@ -181,6 +181,10 @@ export interface Interface {
+     sessionID: SessionSchema.ID
+     permissions: Permission.Ruleset
+   }) => Effect.Effect<void, NotFoundError>
++  /** ocelot: post (or, with the same id, replace) a plugin notice in the transcript. */
++  readonly notice: (
++    input: Parameters<Session.Handle["notice"]>[0] & { sessionID: SessionSchema.ID },
++  ) => ReturnType<Session.Handle["notice"]>
+   readonly move: SessionMove.Interface["move"]
+   readonly prompt: (
+     input: Parameters<Session.Handle["prompt"]>[0] & { sessionID: SessionSchema.ID },
+@@ -427,6 +431,7 @@ const layer = Layer.effect(
+       rename: (input) => sessions.forSession(input.sessionID).rename(input),
+       setMetadata: (input) => sessions.forSession(input.sessionID).setMetadata(input),
+       setPermissions: (input) => sessions.forSession(input.sessionID).setPermissions(input),
++      notice: (input) => sessions.forSession(input.sessionID).notice(input),
+       move: moves.move,
+       compact: (input) => sessions.forSession(input.sessionID).compact(input),
+       wait: (sessionID) => sessions.forSession(sessionID).wait(),
+diff --git a/packages/core/src/session/message-updater.ts b/packages/core/src/session/message-updater.ts
+index e39c659e2..d0a084f87 100644
+--- a/packages/core/src/session/message-updater.ts
++++ b/packages/core/src/session/message-updater.ts
+@@ -14,6 +14,9 @@ export interface Adapter {
+   readonly updateAssistant: (assistant: SessionMessage.Assistant) => Effect.Effect<void>
+   readonly updateShell: (shell: SessionMessage.Shell) => Effect.Effect<void>
+   readonly updateCompaction: (compaction: SessionMessage.Compaction) => Effect.Effect<void>
++  /** ocelot: plugin notices are replaced in place when re-published with the same id. */
++  readonly getNotice: (messageID: SessionMessage.ID) => Effect.Effect<SessionMessage.Notice | undefined>
++  readonly updateNotice: (notice: SessionMessage.Notice) => Effect.Effect<void>
+   readonly appendMessage: (message: SessionMessage.Info) => Effect.Effect<void>
+ }
+ 
+@@ -170,6 +173,21 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
+           }),
+         )
+       },
++      "session.notice": (event) =>
++        Effect.gen(function* () {
++          const existing = yield* adapter.getNotice(event.data.id)
++          const notice = SessionMessage.Notice.make({
++            id: event.data.id,
++            type: "notice",
++            source: event.data.source,
++            level: event.data.level,
++            text: event.data.text,
++            metadata: event.metadata,
++            time: { created: existing?.time.created ?? created },
++          })
++          if (existing) return yield* adapter.updateNotice(notice)
++          yield* adapter.appendMessage(notice)
++        }),
+       "session.skill.activated": (event) => {
+         return adapter.appendMessage(
+           SessionMessage.Skill.make({
+diff --git a/packages/core/src/session/projector.ts b/packages/core/src/session/projector.ts
+index f49ddb473..665c6d0c9 100644
+--- a/packages/core/src/session/projector.ts
++++ b/packages/core/src/session/projector.ts
+@@ -377,6 +377,26 @@ function run(db: DatabaseService, event: MessageEvent) {
+       updateAssistant: updateMessage,
+       updateShell: updateMessage,
+       updateCompaction: updateMessage,
++      getNotice(messageID) {
++        return Effect.gen(function* () {
++          const row = yield* db
++            .select()
++            .from(SessionMessageTable)
++            .where(
++              and(
++                eq(SessionMessageTable.id, messageID),
++                eq(SessionMessageTable.session_id, event.data.sessionID),
++                eq(SessionMessageTable.type, "notice"),
++              ),
++            )
++            .get()
++            .pipe(Effect.orDie)
++          if (!row) return
++          const message = decodeRow(row)
++          return message.type === "notice" ? message : undefined
++        })
++      },
++      updateNotice: updateMessage,
+       appendMessage,
+     }
+     yield* SessionMessageUpdater.update(adapter, event)
+@@ -678,6 +698,12 @@ const layer = Layer.effectDiscard(
+       }),
+     )
+     yield* bus.project(SessionEvent.Synthetic, (event) => run(db, event))
++    yield* bus.project(SessionEvent.Notice, (event) =>
++      Effect.gen(function* () {
++        yield* run(db, event)
++        if (event.data.usage) yield* applyUsage(db, event.data.sessionID, event.data.usage)
++      }),
++    )
+     yield* bus.project(SessionEvent.Skill.Activated, (event) => run(db, event))
+     yield* bus.project(SessionEvent.Shell.Started, (event) => run(db, event))
+     yield* bus.project(SessionEvent.Shell.Ended, (event) => run(db, event))
+@@ -773,7 +799,7 @@ const layer = Layer.effectDiscard(
+         yield* InstructionState.reset(db, event.data.sessionID)
+       }),
+     )
+-    yield* bus.subscribe([SessionEvent.Step.Ended, SessionEvent.Step.Failed, SessionEvent.UsageRecorded]).pipe(
++    yield* bus.subscribe([SessionEvent.Step.Ended, SessionEvent.Step.Failed, SessionEvent.UsageRecorded, SessionEvent.Notice]).pipe(
+       Stream.runForEach((event) => {
+         if (
+           event.type === SessionEvent.Step.Failed.type &&
+diff --git a/packages/core/src/session/runner/to-llm-message.ts b/packages/core/src/session/runner/to-llm-message.ts
+index f475c5951..b2e5a769f 100644
+--- a/packages/core/src/session/runner/to-llm-message.ts
++++ b/packages/core/src/session/runner/to-llm-message.ts
+@@ -251,6 +251,7 @@ function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMe
+   switch (message.type) {
+     case "agent-switched":
+     case "idle":
++    case "notice":
+       return []
+     case "model-switched":
+       return modelSwitched(message, model)
+diff --git a/packages/core/src/session/session.ts b/packages/core/src/session/session.ts
+index 0738f4380..9aab9912e 100644
+--- a/packages/core/src/session/session.ts
++++ b/packages/core/src/session/session.ts
+@@ -80,6 +80,29 @@ export const make = Effect.fn("Session.make")(function* () {
+     yield* get(sessionID)
+     yield* bus.publish(SessionEvent.MetadataUpdated, { sessionID, metadata: input.metadata })
+   })
++  // ocelot: a plugin notice in the transcript; the same id replaces it. Returns the notice's id.
++  const notice = Effect.fn("Session.notice")(function* (
++    sessionID: SessionSchema.ID,
++    input: {
++      id?: SessionMessage.ID
++      source: string
++      level?: SessionMessage.Notice["level"]
++      text: string
++      usage?: SessionEvent.Notice["data"]["usage"]
++    },
++  ) {
++    yield* get(sessionID)
++    const id = input.id ?? SessionMessage.ID.create()
++    yield* bus.publish(SessionEvent.Notice, {
++      sessionID,
++      id,
++      source: input.source,
++      level: input.level ?? "info",
++      text: input.text,
++      ...(input.usage ? { usage: input.usage } : {}),
++    })
++    return { id }
++  })
+   const setPermissions = Effect.fn("Session.setPermissions")(function* (
+     sessionID: SessionSchema.ID,
+     input: { permissions: Permission.Ruleset },
+@@ -350,6 +373,7 @@ export const make = Effect.fn("Session.make")(function* () {
+     view,
+     rename,
+     setMetadata,
++    notice,
+     setPermissions,
+     switchAgent,
+     switchModel,
+@@ -374,6 +398,7 @@ export const make = Effect.fn("Session.make")(function* () {
+     const view = operations.view.bind(undefined, sessionID)
+     const rename = operations.rename.bind(undefined, sessionID)
+     const setMetadata = operations.setMetadata.bind(undefined, sessionID)
++    const notice = operations.notice.bind(undefined, sessionID)
+     const setPermissions = operations.setPermissions.bind(undefined, sessionID)
+     const switchAgent = operations.switchAgent.bind(undefined, sessionID)
+     const switchModel = operations.switchModel.bind(undefined, sessionID)
+@@ -401,6 +426,7 @@ export const make = Effect.fn("Session.make")(function* () {
+       view,
+       rename,
+       setMetadata,
++      notice,
+       setPermissions,
+       switchAgent,
+       switchModel,
+diff --git a/packages/core/test/plugin/host.ts b/packages/core/test/plugin/host.ts
+index eaea2bb58..e00549be1 100644
+--- a/packages/core/test/plugin/host.ts
++++ b/packages/core/test/plugin/host.ts
+@@ -173,6 +173,7 @@ export function host(overrides: Overrides = {}): Plugin.Context {
+       update: overrides.session?.update ?? (() => Effect.die("unused session.update")),
+       move: overrides.session?.move ?? (() => Effect.die("unused session.move")),
+       synthetic: overrides.session?.synthetic ?? (() => Effect.die("unused session.synthetic")),
++      notice: overrides.session?.notice ?? (() => Effect.die("unused session.notice")),
+       interrupt: overrides.session?.interrupt ?? (() => Effect.die("unused session.interrupt")),
+       wait: overrides.session?.wait ?? (() => Effect.die("unused session.wait")),
+       context: overrides.session?.context ?? (() => Effect.die("unused session.context")),
+diff --git a/packages/core/test/session-create.test.ts b/packages/core/test/session-create.test.ts
+index 5a2d687d4..f419e7f08 100644
+--- a/packages/core/test/session-create.test.ts
++++ b/packages/core/test/session-create.test.ts
+@@ -307,6 +307,38 @@ describe("Session.create", () => {
+     }),
+   )
+ 
++  // ocelot: plugin notices in the transcript.
++  it.effect("posts and replaces notices, counting their usage toward the session", () =>
++    Effect.gen(function* () {
++      const session = yield* Session.Service
++      const created = yield* session.create({ location })
++      const tokens = (read: number) => ({ input: 0, output: 1, reasoning: 0, cache: { read, write: 0 } })
++
++      const warm = yield* session.notice({
++        sessionID: created.id,
++        source: "cache-warmer",
++        text: "Cache kept warm · $0.01",
++        usage: { cost: Money.USD.make(0.01), tokens: tokens(1000) },
++      })
++      yield* session.notice({
++        sessionID: created.id,
++        id: warm.id,
++        source: "cache-warmer",
++        text: "Cache kept warm · 2 refreshes · $0.03",
++        usage: { cost: Money.USD.make(0.02), tokens: tokens(2000) },
++      })
++      yield* session.notice({ sessionID: created.id, source: "cache-warmer", level: "warning", text: "Cache miss" })
++
++      expect(yield* session.messages({ sessionID: created.id, order: "asc" })).toMatchObject([
++        { id: warm.id, type: "notice", source: "cache-warmer", level: "info", text: "Cache kept warm · 2 refreshes · $0.03" },
++        { type: "notice", level: "warning", text: "Cache miss" },
++      ])
++      const info = yield* session.get(created.id)
++      expect(Number(info.cost)).toBeCloseTo(0.03)
++      expect(info.tokens?.cache.read).toBe(3000)
++    }),
++  )
++
+   it.effect("creates a fresh projected session when the ID is omitted", () =>
+     Effect.gen(function* () {
+       const session = yield* Session.Service
+diff --git a/packages/plugin/src/effect/session.ts b/packages/plugin/src/effect/session.ts
+index bea12a931..d20410e30 100644
+--- a/packages/plugin/src/effect/session.ts
++++ b/packages/plugin/src/effect/session.ts
+@@ -160,6 +160,7 @@ export type SessionDomain = Pick<
+   | "generate"
+   | "command"
+   | "synthetic"
++  | "notice"
+   | "interrupt"
+   | "update"
+   | "move"
+diff --git a/packages/plugin/src/promise/adapter.ts b/packages/plugin/src/promise/adapter.ts
+index 15ccb58a0..b00580360 100644
+--- a/packages/plugin/src/promise/adapter.ts
++++ b/packages/plugin/src/promise/adapter.ts
+@@ -586,6 +586,7 @@ export function fromPromise(plugin: Plugin) {
+             generate: adaptApiMethod(SessionEndpoints["session.generate"], host.session.generate),
+             command: adaptApiMethod(SessionEndpoints["session.command"], host.session.command),
+             synthetic: adaptApiMethod(SessionEndpoints["session.synthetic"], host.session.synthetic),
++            notice: adaptApiMethod(SessionEndpoints["session.notice"], host.session.notice),
+             interrupt: adaptApiMethod(SessionEndpoints["session.interrupt"], host.session.interrupt),
+             update: adaptApiMethod(SessionEndpoints["session.update"], host.session.update),
+             move: adaptApiMethod(SessionEndpoints["session.move"], host.session.move),
+diff --git a/packages/plugin/src/promise/session.ts b/packages/plugin/src/promise/session.ts
+index ac3aa3888..885bd5fbc 100644
+--- a/packages/plugin/src/promise/session.ts
++++ b/packages/plugin/src/promise/session.ts
+@@ -160,6 +160,7 @@ export type SessionDomain = Pick<
+   | "generate"
+   | "command"
+   | "synthetic"
++  | "notice"
+   | "interrupt"
+   | "update"
+   | "move"
+diff --git a/packages/protocol/openapi.json b/packages/protocol/openapi.json
+index 7ca75e0ec..486de02f3 100644
+--- a/packages/protocol/openapi.json
++++ b/packages/protocol/openapi.json
+@@ -886,9 +886,19 @@
+                 }
+               }
+             }
++          },
++          "404": {
++            "description": "SessionNotFoundError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
++                }
++              }
++            }
+           }
+         },
+-        "description": "Create a session at the requested location.",
++        "description": "Create a session at the requested location. Set parentID to create a child of that session; it lives at the parent's location unless one is given.",
+         "summary": "Create session",
+         "requestBody": {
+           "content": {
+@@ -927,6 +937,17 @@
+                       }
+                     ]
+                   },
++                  "parentID": {
++                    "anyOf": [
++                      {
++                        "type": "string",
++                        "pattern": "^ses"
++                      },
++                      {
++                        "type": "null"
++                      }
++                    ]
++                  },
+                   "model": {
+                     "anyOf": [
+                       {
+@@ -1667,7 +1688,7 @@
+             }
+           }
+         },
+-        "description": "Create a child session by copying projected history before a message. Omit before to copy the full history.",
++        "description": "Create a session by copying projected history before a message. Omit before to copy the full history. Set child to make the copy a child of this session.",
+         "summary": "Fork session",
+         "requestBody": {
+           "content": {
+@@ -1685,6 +1706,16 @@
+                         "type": "null"
+                       }
+                     ]
++                  },
++                  "child": {
++                    "anyOf": [
++                      {
++                        "type": "boolean"
++                      },
++                      {
++                        "type": "null"
++                      }
++                    ]
+                   }
+                 },
+                 "additionalProperties": false
+@@ -1853,6 +1884,145 @@
+         }
+       }
+     },
++    "/api/session/{sessionID}/notice": {
++      "post": {
++        "tags": ["session"],
++        "operationId": "session.notice",
++        "parameters": [
++          {
++            "name": "sessionID",
++            "in": "path",
++            "schema": {
++              "type": "string",
++              "pattern": "^ses"
++            },
++            "required": true
++          }
++        ],
++        "security": [],
++        "responses": {
++          "200": {
++            "description": "Success",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "type": "object",
++                  "properties": {
++                    "data": {
++                      "type": "object",
++                      "properties": {
++                        "id": {
++                          "type": "string",
++                          "pattern": "^msg_"
++                        }
++                      },
++                      "required": ["id"],
++                      "additionalProperties": false
++                    }
++                  },
++                  "required": ["data"],
++                  "additionalProperties": false
++                }
++              }
++            }
++          },
++          "400": {
++            "description": "InvalidRequestError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
++                }
++              }
++            }
++          },
++          "401": {
++            "description": "UnauthorizedError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
++                }
++              }
++            }
++          },
++          "404": {
++            "description": "SessionNotFoundError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "anyOf": [
++                    {
++                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
++                    },
++                    {
++                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
++                    }
++                  ]
++                }
++              }
++            }
++          }
++        },
++        "description": "Add a notice to the session transcript, or replace the notice with the given id. Notices are never sent to the model; optional usage counts toward the session's cost.",
++        "summary": "Post notice",
++        "requestBody": {
++          "content": {
++            "application/json": {
++              "schema": {
++                "type": "object",
++                "properties": {
++                  "id": {
++                    "anyOf": [
++                      {
++                        "type": "string",
++                        "pattern": "^msg_"
++                      },
++                      {
++                        "type": "null"
++                      }
++                    ]
++                  },
++                  "source": {
++                    "type": "string"
++                  },
++                  "level": {
++                    "anyOf": [
++                      {
++                        "type": "string",
++                        "enum": ["info", "warning"]
++                      },
++                      {
++                        "type": "null"
++                      }
++                    ]
++                  },
++                  "text": {
++                    "type": "string"
++                  },
++                  "usage": {
++                    "type": "object",
++                    "properties": {
++                      "cost": {
++                        "$ref": "#/components/schemas/Money.USD"
++                      },
++                      "tokens": {
++                        "$ref": "#/components/schemas/TokenUsage.Info"
++                      }
++                    },
++                    "required": ["cost", "tokens"],
++                    "additionalProperties": false
++                  }
++                },
++                "required": ["source", "text"],
++                "additionalProperties": false
++              }
++            }
++          },
++          "required": true
++        }
++      }
++    },
+     "/api/session/{sessionID}/move": {
+       "post": {
+         "tags": ["session"],
+@@ -4897,7 +5067,8 @@
+                     "skill",
+                     "shell",
+                     "assistant",
+-                    "compaction"
++                    "compaction",
++                    "notice"
+                   ]
+                 },
+                 {
+@@ -17277,6 +17448,9 @@
+               "created": {
+                 "type": "number"
+               },
++              "output": {
++                "type": "number"
++              },
+               "streamed": {
+                 "type": "number"
+               },
+@@ -17702,6 +17876,9 @@
+           },
+           {
+             "$ref": "#/components/schemas/Session.Message.Idle"
++          },
++          {
++            "$ref": "#/components/schemas/Session.Message.Notice"
+           }
+         ]
+       },
+@@ -17799,6 +17976,44 @@
+         "required": ["id", "time", "type", "model"],
+         "additionalProperties": false
+       },
++      "Session.Message.Notice": {
++        "type": "object",
++        "properties": {
++          "id": {
++            "type": "string",
++            "pattern": "^msg_"
++          },
++          "metadata": {
++            "type": "object"
++          },
++          "time": {
++            "type": "object",
++            "properties": {
++              "created": {
++                "type": "number"
++              }
++            },
++            "required": ["created"],
++            "additionalProperties": false
++          },
++          "type": {
++            "type": "string",
++            "enum": ["notice"]
++          },
++          "source": {
++            "type": "string"
++          },
++          "level": {
++            "type": "string",
++            "enum": ["info", "warning"]
++          },
++          "text": {
++            "type": "string"
++          }
++        },
++        "required": ["id", "time", "type", "source", "level", "text"],
++        "additionalProperties": false
++      },
+       "Session.Message.ProviderState": {
+         "type": "object"
+       },
+diff --git a/packages/protocol/src/groups/message.ts b/packages/protocol/src/groups/message.ts
+index c744abd88..75f564fed 100644
+--- a/packages/protocol/src/groups/message.ts
++++ b/packages/protocol/src/groups/message.ts
+@@ -32,6 +32,7 @@ export const SessionMessagesQuery = Schema.Struct({
+       "shell",
+       "assistant",
+       "compaction",
++      "notice",
+     ] satisfies ReadonlyArray<SessionMessage.Type>),
+   ).annotate({
+     description:
+@@ -61,6 +62,7 @@ export const PublicSessionMessage = Schema.Union([
+   SessionMessage.Assistant,
+   SessionMessage.Compaction,
+   SessionMessage.Idle,
++  SessionMessage.Notice,
+ ]).annotate({ identifier: "Session.Message.Info" })
+ 
+ export const MessageGroup = HttpApiGroup.make("server.message")
+diff --git a/packages/protocol/src/groups/session.ts b/packages/protocol/src/groups/session.ts
+index 9ff239964..1fc15544b 100644
+--- a/packages/protocol/src/groups/session.ts
++++ b/packages/protocol/src/groups/session.ts
+@@ -380,6 +380,30 @@ export const makeSessionGroup = <
+           }),
+         ),
+     )
++    .add(
++      // ocelot: plugin notices in the transcript (never sent to the model).
++      HttpApiEndpoint.post("session.notice", "/api/session/:sessionID/notice", {
++        params: { sessionID: Session.ID },
++        payload: Schema.Struct({
++          id: SessionMessage.ID.pipe(Schema.optional),
++          source: Schema.String,
++          level: SessionMessage.Notice.fields.level.pipe(Schema.optional),
++          text: Schema.String,
++          usage: SessionEvent.Notice.data.fields.usage,
++        }),
++        success: Schema.Struct({ data: Schema.Struct({ id: SessionMessage.ID }) }),
++        error: SessionNotFoundError,
++      })
++        .middleware(sessionLocationMiddleware)
++        .annotateMerge(
++          OpenApi.annotations({
++            identifier: "session.notice",
++            summary: "Post notice",
++            description:
++              "Add a notice to the session transcript, or replace the notice with the given id. Notices are never sent to the model; optional usage counts toward the session's cost.",
++          }),
++        ),
++    )
+     .add(
+       HttpApiEndpoint.post("session.move", "/api/session/:sessionID/move", {
+         params: { sessionID: Session.ID },
+diff --git a/packages/schema/src/session-event.ts b/packages/schema/src/session-event.ts
+index 424436969..1733b2892 100644
+--- a/packages/schema/src/session-event.ts
++++ b/packages/schema/src/session-event.ts
+@@ -293,6 +293,25 @@ export const Synthetic = Event.durable({
+ })
+ export type Synthetic = typeof Synthetic.Type
+ 
++/**
++ * ocelot: a plugin notice in the transcript (SessionMessage.Notice). Publishing again with the
++ * same id replaces it. Optional usage (e.g. a cache refresh) counts toward the session's cost
++ * like session.usage.recorded, without entering model context.
++ */
++export const Notice = Event.durable({
++  type: "session.notice",
++  ...options,
++  schema: {
++    ...Base,
++    id: SessionMessage.ID,
++    source: Schema.String,
++    level: SessionMessage.Notice.fields.level,
++    text: Schema.String,
++    usage: Schema.Struct({ cost: Money.USD, tokens: TokenUsage.Info }).pipe(optional),
++  },
++})
++export type Notice = typeof Notice.Type
++
+ export namespace Skill {
+   export const Activated = Event.durable({
+     type: "session.skill.activated",
+@@ -678,6 +697,7 @@ export const Definitions = Event.inventory(
+   Execution.Interrupted,
+   InstructionsUpdated,
+   Synthetic,
++  Notice,
+   Skill.Activated,
+   Shell.Started,
+   Shell.Ended,
+diff --git a/packages/schema/src/session-message.ts b/packages/schema/src/session-message.ts
+index c83442bc5..d37cd4a04 100644
+--- a/packages/schema/src/session-message.ts
++++ b/packages/schema/src/session-message.ts
+@@ -294,6 +294,20 @@ export const Idle = Schema.Struct({
+   outcome: Schema.Literals(["succeeded", "failed", "interrupted"]),
+ }).annotate({ identifier: "Session.Message.Idle" })
+ 
++/**
++ * ocelot: a transcript notice from a plugin (e.g. "Cache miss after 7m idle"). Never sent to
++ * the model and never compacted; re-publishing the same id replaces the notice in place.
++ */
++export interface Notice extends Schema.Schema.Type<typeof Notice> {}
++export const Notice = Schema.Struct({
++  ...Base,
++  type: Schema.tag("notice"),
++  /** Who posted it, e.g. the plugin's name. */
++  source: Schema.String,
++  level: Schema.Literals(["info", "warning"]),
++  text: Schema.String,
++}).annotate({ identifier: "Session.Message.Notice" })
++
+ export const Info = Schema.Union([
+   AgentSelected,
+   ModelSelected,
+@@ -306,6 +320,7 @@ export const Info = Schema.Union([
+   Assistant,
+   Compaction,
+   Idle,
++  Notice,
+ ]).annotate({ identifier: "Session.Message.Info" })
+ export type Info =
+   | AgentSelected
+@@ -319,4 +334,5 @@ export type Info =
+   | Assistant
+   | Compaction
+   | Idle
++  | Notice
+ export type Type = Info["type"]
+diff --git a/packages/server/src/handlers/session.ts b/packages/server/src/handlers/session.ts
+index b53598968..0d7ed39a4 100644
+--- a/packages/server/src/handlers/session.ts
++++ b/packages/server/src/handlers/session.ts
+@@ -394,6 +394,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
+           return HttpApiSchema.NoContent.make()
+         }),
+       )
++      .handle(
++        "session.notice",
++        Effect.fn(function* (ctx) {
++          const data = yield* session
++            .notice({ sessionID: ctx.params.sessionID, ...ctx.payload })
++            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
++          return { data }
++        }),
++      )
+       .handle(
+         "session.synthetic",
+         Effect.fn(function* (ctx) {

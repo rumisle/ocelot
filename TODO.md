@@ -103,6 +103,11 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 - [ ] Custom renderers for tool calls in general (plugin-provided), e.g. showing a worker's model
       and result on its card.
 
+- [x] Plugin notices in the transcript: patches `core/session-notices` (never sent to the model; optional usage
+      counts toward the session), `web/session-notices`, `tui/session-notices`. opencode-cache-warmer posts
+      refresh runs and significant misses.
+- [ ] Live plugin status in the web app (e.g. the cache warmer's "refresh in 3m 12s" countdown).
+
 ### General
 - [ ] The web UI has many small bugs; collect them here as we hit them.
 
