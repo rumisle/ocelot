@@ -1,0 +1,10 @@
+[Unit]
+Description=Keep the ocelot server running (boot, and restart within a minute after a crash)
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

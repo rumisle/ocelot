@@ -1,0 +1,14 @@
+# Keeps the ocelot server running: `ocelot service start` is a no-op when the server is healthy and
+# starts it otherwise. ocelot manages the server itself (upgrades, restarts, terminal handoff);
+# systemd only nudges it at boot and every minute (ocelot.timer).
+[Unit]
+Description=Ensure the ocelot server is running
+
+[Service]
+Type=oneshot
+# Through a login + interactive zsh, so the server (and every command its agents run) gets the
+# same environment as a fresh terminal, minus systemd's own variables.
+ExecStart=/bin/zsh -lic 'unset INVOCATION_ID JOURNAL_STREAM MANAGERPID MANAGERPIDFDID SYSTEMD_EXEC_PID MEMORY_PRESSURE_WATCH MEMORY_PRESSURE_WRITE; export TERM=xterm-256color COLORTERM=truecolor; exec ~/.ocelot/bin/ocelot service start'
+StandardInput=null
+# The server this starts must outlive the oneshot.
+KillMode=process

@@ -36,6 +36,34 @@ It runs its own background server with its own port and session database
 (`~/.local/share/opencode/opencode-ocelot.db`), so it can be installed next to stock
 OpenCode without the two interfering. Sessions from one don't show up in the other.
 
+## Always-on server (Linux)
+
+The background server starts on demand and stops with the machine. To keep it running (from boot,
+and back within a minute after a crash), install the systemd user units in
+[`contrib/systemd`](contrib/systemd):
+
+```bash
+cp contrib/systemd/ocelot.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now ocelot.timer
+loginctl enable-linger $USER   # start at boot without logging in
+```
+
+systemd only runs `ocelot service start` (a no-op when the server is healthy); ocelot still
+manages the server itself, so `ocelot upgrade` and `ocelot service restart` work as before. The
+start goes through a login zsh so the server, and every command its agents run, sees a fresh
+terminal's environment. `scripts/install.sh` restarts through systemd when the units are installed.
+
+To reach it from other devices over HTTPS, keep it on loopback and put Tailscale in front:
+
+```bash
+ocelot service set hostname 127.0.0.1
+sudo tailscale serve --service=svc:<name> --https=443 --bg http://127.0.0.1:46624
+ocelot pair --url https://<name>.<tailnet>.ts.net
+```
+
+Then approve the service in the Tailscale admin console. Keep the password: the server can run
+any command as you, and only the password keeps web pages you visit from driving it.
+
 ## Updating
 
 ```bash
