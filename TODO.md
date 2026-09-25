@@ -36,7 +36,6 @@ Open:
 - [x] Switched over: copied `opencode.db` to `opencode-ocelot.db`; stock service stopped.
 - [x] ocelot service on Tailscale: 100.78.68.89:46624.
 - [x] opencode-octopi finds `service-*.json` by pid.
-- [ ] Branding: `--version` says "opencode v2.0.16-1"; web UI title, TUI name.
 - [ ] Try the installer on the Mac (curl download, so no quarantine).
 
 ## 1. Plugin API (server)
@@ -53,32 +52,33 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 ## 2. Web UI
 
 ### Rendering
-- [ ] Math: accept `$…$` inline and single-line `$$…$$` (renderer only takes
-      `\(…\)` and `$$` on their own lines; `packages/ui/src/context/marked-parser.tsx`).
+- [x] Math: `$…$`, `$$…$$` (also inline), `\[…\]` — patch `web/math-delimiters`.
 - [ ] Syntax highlighting like pi-review.
 
 ### Timeline
-- [ ] Follow scrolling (auto-scroll with new output; stop when the user scrolls up).
-- [ ] Show clearly whether a tool call is running.
-- [ ] Show how long each tool call ran.
-- [ ] Working timer (port of our pi working-timer extension).
-- [ ] Drop the per-message meta (model name, "Build") on user and assistant
-      messages. Wastes vertical space; nobody switches model that often.
-- [ ] Per-turn stats: show something useful instead, e.g. cache hit rate.
+- [ ] Follow scrolling. Upstream has it (virtualizer "pinned" state; wheel-up unpins, reaching the
+      end or sending re-pins). Could not reproduce a failure headless (desktop + touch, plain text,
+      tool calls, send while scrolled up). Need the exact case: device, what was on screen.
+- [ ] Tool status: running state + duration per call. Needs a UI design first.
+- [ ] Working timer (port of pi working-timer). Needs a UI design first.
+- [x] Message meta: user messages lose "Build · model · time"; assistant keeps only the duration.
+      Patch `web/message-meta`. (User revert/copy buttons stay in their row.)
+- [ ] Per-turn stats in the assistant meta line, next to the duration. To discuss; pi's
+      turn-stats shows `◷ 2m 04s 23:47 │ ttft 480ms tps 42.1 │ ↓4210 (3940 cached) ↑318 │ cache 94% │ $0.21`.
 
 ### Composer
-- [ ] Move model and effort selection into the "+" menu.
-- [ ] One-line chat box by default; grow as you type.
+- [x] One-row composer `[+] [editor] [send]`, grows as you type; Model / Effort / Agent in the + menu.
+      Patch `web/composer-one-line`. Upstream e2e `model-selection-flow.spec.ts` still expects the old button.
 
 ### Mobile
-- [ ] Top bar → two floating buttons; it wastes a lot of vertical space.
+- [ ] (later) Top bar → two floating buttons; it wastes a lot of vertical space.
 
 ### General
 - [ ] The web UI has many small bugs; collect them here as we hit them.
 
 ## 3. Cost tracking
 
-- [ ] Track cost of GPT models on a subscription (upstream doesn't).
+- [x] ChatGPT-plan OpenAI models keep API prices (upstream zeroed them). Patch `core/subscription-cost`.
 
 ## 4. Branching (big patch, last)
 

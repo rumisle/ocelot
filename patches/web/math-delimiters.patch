@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 25 Sep 2026 13:04:02 +0800
+Subject: =?UTF-8?q?ui/markdown:=20render=20$=E2=80=A6$,=20$$=E2=80=A6$$=20?=
+ =?UTF-8?q?and=20\[=E2=80=A6\]=20math?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The KaTeX extension only accepted \(…\) inline and $$ on lines of their own,
+while models mostly write $…$ inline and $$…$$ on one line, so their math
+showed as raw TeX. Accept those forms too, plus \[…\] display math.
+
+Inline $…$ follows Pandoc's rule so prices stay literal: no space just inside
+the dollars and no digit right after the closing one ($5 and $10, $5-$6).
+
+Ocelot-Patch: web/math-delimiters
+
+diff --git a/packages/ui/src/context/marked-base.tsx b/packages/ui/src/context/marked-base.tsx
+index dbb857dc1..6880646b1 100644
+--- a/packages/ui/src/context/marked-base.tsx
++++ b/packages/ui/src/context/marked-base.tsx
+@@ -15,7 +15,7 @@ let smallParser: Marked | undefined
+ 
+ export function parseSmallMarkdown(text: string) {
+   // Any possible KaTeX delimiter stays on the worker, including escaped ones.
+-  if (text.length > 1024 || text.includes("\\(") || text.includes("$$")) return
++  if (text.length > 1024 || text.includes("\\(") || text.includes("\\[") || text.includes("$")) return
+   // Ordinary prose does not need the block/inline lexer's cold regular expressions.
+   // Keep every possible Markdown construct, autolink, and hard break on that lexer.
+   if (
+diff --git a/packages/ui/src/context/marked-parser.test.ts b/packages/ui/src/context/marked-parser.test.ts
+index a5aa8003f..3a0322a7b 100644
+--- a/packages/ui/src/context/marked-parser.test.ts
++++ b/packages/ui/src/context/marked-parser.test.ts
+@@ -15,6 +15,23 @@ test("renders inline and block math", async () => {
+   expect(await parser.parse("$$\nx^2\n$$\n")).toContain('<span class="katex-display">')
+ })
+ 
++test("renders the math forms models write", async () => {
++  const inline = (html: string) => (html.match(/<span class="katex">/g) ?? []).length
++  const display = (html: string) => (html.match(/<span class="katex-display">/g) ?? []).length
++  expect(inline(await parser.parse("Then $I(0) = 0$ and $x$."))).toBe(2)
++  expect(display(await parser.parse("$$I = \\int_0^1 f(x)\\,dx$$\n"))).toBe(1)
++  expect(display(await parser.parse("Define $$I(a) = a$$ here."))).toBe(1)
++  expect(display(await parser.parse("\\[\nx^2\n\\]\n"))).toBe(1)
++  expect(display(await parser.parse("$$\nx^2 + y^2\n$$\n"))).toBe(1)
++})
++
++test.each(["It costs $5 and $10.", "Between $5-$6 per hour", "a $ b $ c", "\\$x$"])(
++  "leaves dollar amounts alone: %s",
++  async (text) => {
++    expect(await parser.parse(text)).not.toContain("katex")
++  },
++)
++
+ test("uses the configured code highlighter", async () => {
+   expect(await parser.parse("```ts\nconst value = 1\n```\n")).toBe('<pre data-language="ts">const value = 1</pre>\n')
+ })
+diff --git a/packages/ui/src/context/marked-parser.tsx b/packages/ui/src/context/marked-parser.tsx
+index e058559ea..5adeca86a 100644
+--- a/packages/ui/src/context/marked-parser.tsx
++++ b/packages/ui/src/context/marked-parser.tsx
+@@ -7,8 +7,17 @@ export function createMarkdownParser(highlight: (code: string, language: string)
+   return createMarkdownBase().use(katexExtension, markedShiki({ highlight }))
+ }
+ 
+-const inlineMathRegex = /^\\\(((?:\\.|[^\\\n])*?)\\\)/
+-const blockMathRegex = /^\$\$\n([\s\S]+?)\n\$\$(?:\n|$)/
++// Math in the forms models write: \(…\) and $…$ inline, $$…$$ and \[…\] for display math,
++// either on their own lines or inline.
++const inlineMath = [
++  { regex: /^\$\$((?:\\.|[^\\$])+?)\$\$/, displayMode: true },
++  // Pandoc's rule keeps prices literal: no space just inside the dollars, and no digit
++  // right after the closing one ($5 and $10, $5-$6).
++  { regex: /^\$(?![\s$])((?:\\.|[^\\$\n])+?)(?<!\s)\$(?!\d)/, displayMode: false },
++  { regex: /^\\\(((?:\\.|[^\\\n])*?)\\\)/, displayMode: false },
++  { regex: /^\\\[([\s\S]+?)\\\]/, displayMode: true },
++]
++const blockMath = [/^ {0,3}\$\$([\s\S]+?)\$\$[ \t]*(?:\n|$)/, /^ {0,3}\\\[([\s\S]+?)\\\][ \t]*(?:\n|$)/]
+ 
+ const katexExtension: MarkedExtension = {
+   extensions: [
+@@ -16,18 +25,20 @@ const katexExtension: MarkedExtension = {
+       name: "inlineKatex",
+       level: "inline",
+       start(src) {
+-        const index = src.indexOf("\\(")
++        const index = src.search(/\$|\\[([]/)
+         if (index === -1) return
+         return index
+       },
+       tokenizer(src) {
+-        const match = src.match(inlineMathRegex)
+-        if (!match) return
+-        return {
+-          type: "inlineKatex",
+-          raw: match[0],
+-          text: match[1].trim(),
+-          displayMode: false,
++        for (const { regex, displayMode } of inlineMath) {
++          const match = src.match(regex)
++          if (!match) continue
++          return {
++            type: "inlineKatex",
++            raw: match[0],
++            text: match[1].trim(),
++            displayMode,
++          }
+         }
+       },
+       renderer: renderKatexToken,
+@@ -36,13 +47,15 @@ const katexExtension: MarkedExtension = {
+       name: "blockKatex",
+       level: "block",
+       tokenizer(src) {
+-        const match = src.match(blockMathRegex)
+-        if (!match) return
+-        return {
+-          type: "blockKatex",
+-          raw: match[0],
+-          text: match[1].trim(),
+-          displayMode: true,
++        for (const regex of blockMath) {
++          const match = src.match(regex)
++          if (!match) continue
++          return {
++            type: "blockKatex",
++            raw: match[0],
++            text: match[1].trim(),
++            displayMode: true,
++          }
+         }
+       },
+       renderer: renderKatexToken,

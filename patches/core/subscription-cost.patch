@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 25 Sep 2026 13:18:38 +0800
+Subject: core/openai: keep API prices for ChatGPT-plan models
+
+Signed in with a ChatGPT plan, OpenAI models had their prices cleared, so every
+run recorded $0. Keep the API prices instead, like the Anthropic models on a
+Claude plan: the cost then shows what the same usage would cost on the API.
+
+Ocelot-Patch: core/subscription-cost
+
+diff --git a/packages/core/src/plugin/provider/openai.ts b/packages/core/src/plugin/provider/openai.ts
+index 255cbb2cf..a23cb99a8 100644
+--- a/packages/core/src/plugin/provider/openai.ts
++++ b/packages/core/src/plugin/provider/openai.ts
+@@ -270,8 +270,7 @@ export const OpenAIPlugin = define({
+     })
+     yield* ctx.model.transform((models) => {
+       for (const model of models.list(Provider.ID.openai)) {
+-        // ChatGPT-plan tokens only authorize codex-eligible models, and the
+-        // subscription covers usage, so hide the rest and zero the cost.
++        // ChatGPT-plan tokens only authorize codex-eligible models, so hide the rest.
+         models.update(model.providerID, model.id, (draft) => {
+           if (!chatgpt) return
+           if (Schema.is(Schema.Struct({ mode: Schema.Literal("pro") }))(draft.body?.reasoning)) {
+@@ -289,7 +288,6 @@ export const OpenAIPlugin = define({
+             draft.enabled = false
+             return
+           }
+-          draft.cost = []
+           // Match Codex CLI so context consumption and subscription usage stay consistent between clients.
+           draft.limit = { ...draft.limit, context: 400_000, input: 272_000 }
+         })
+diff --git a/packages/core/test/plugin/provider-openai.test.ts b/packages/core/test/plugin/provider-openai.test.ts
+index 2f6725f3c..82f528dc0 100644
+--- a/packages/core/test/plugin/provider-openai.test.ts
++++ b/packages/core/test/plugin/provider-openai.test.ts
+@@ -159,7 +159,8 @@ describe("OpenAIPlugin", () => {
+       const eligible = required(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-5.5")))
+       expect(eligible.package).toBe("@opencode/ai/providers/openai")
+       expect(eligible.headers).toMatchObject({ originator: "opencode", "chatgpt-account-id": "acct_123" })
+-      expect(eligible.cost).toEqual([])
++      // ocelot: ChatGPT-plan models keep their API prices.
++      expect(eligible.cost).toHaveLength(1)
+       expect(eligible.limit).toEqual({ context: 400_000, input: 272_000, output: 128_000 })
+       expect(eligible.enabled).toBe(true)
+       expect(required(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-5.5-pro"))).enabled).toBe(false)
