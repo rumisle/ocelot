@@ -39,17 +39,19 @@ OpenCode without the two interfering. Sessions from one don't show up in the oth
 ## Always-on server (Linux)
 
 The background server starts on demand and stops with the machine. To keep it running (from boot,
-and back within a minute after a crash), install the systemd user units in
+and back within seconds after a crash), install the systemd user unit in
 [`contrib/systemd`](contrib/systemd):
 
 ```bash
-cp contrib/systemd/ocelot.{service,timer} ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user enable --now ocelot.timer
+cp contrib/systemd/ocelot.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now ocelot.service
 loginctl enable-linger $USER   # start at boot without logging in
 ```
 
-systemd only runs `ocelot service start` (a no-op when the server is healthy); ocelot still
-manages the server itself, so `ocelot upgrade` and `ocelot service restart` work as before. The
+The unit runs `ocelot service start` (a no-op when the server is healthy), then waits for the server
+process to exit and does it again. ocelot still manages the server itself, so `ocelot upgrade` and
+`ocelot service restart` work as before; the unit then watches the replacement. To stop the server
+for good, stop the unit first: `systemctl --user stop ocelot && ocelot service stop`. The
 start goes through a login zsh so the server, and every command its agents run, sees a fresh
 terminal's environment. `scripts/install.sh` restarts through systemd when the units are installed.
 

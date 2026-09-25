@@ -21,9 +21,9 @@ log "installed $("$dir/ocelot" --version 2>/dev/null | head -1) to $dir/ocelot"
 if [ -n "$("$dir/ocelot" service status 2>/dev/null)" ]; then # prints the URL only when running
   log "restarting the ocelot service"
   if systemctl --user cat ocelot.service >/dev/null 2>&1; then
-    # Started by systemd (see README), so the server gets a login shell's environment, not ours.
+    # Let the systemd unit start it (see README), so the server gets a login shell's environment, not ours.
     "$dir/ocelot" service stop >/dev/null
-    systemctl --user start ocelot.service
+    systemctl --user restart ocelot.service
   else
     "$dir/ocelot" service restart >/dev/null
   fi

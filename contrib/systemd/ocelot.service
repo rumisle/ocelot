@@ -1,14 +1,24 @@
-# Keeps the ocelot server running: `ocelot service start` is a no-op when the server is healthy and
-# starts it otherwise. ocelot manages the server itself (upgrades, restarts, terminal handoff);
-# systemd only nudges it at boot and every minute (ocelot.timer).
+# Keeps the ocelot server running. ocelot manages the server itself (upgrades, restarts, terminal
+# handoff), so systemd doesn't own the process: this unit makes sure a server is running
+# (`ocelot service start` is a no-op when one is healthy), then waits for that process to exit and
+# restarts, which starts a new server or finds the one that replaced it (e.g. after `ocelot upgrade`).
+# `systemctl --user stop ocelot` stops only the watching; the server stops with `ocelot service stop`
+# (and comes back unless this unit is stopped first).
 [Unit]
-Description=Ensure the ocelot server is running
+Description=Keep the ocelot server running
+StartLimitIntervalSec=60
+StartLimitBurst=10
 
 [Service]
-Type=oneshot
+Type=simple
 # Through a login + interactive zsh, so the server (and every command its agents run) gets the
 # same environment as a fresh terminal, minus systemd's own variables.
-ExecStart=/bin/zsh -lic 'unset INVOCATION_ID JOURNAL_STREAM MANAGERPID MANAGERPIDFDID SYSTEMD_EXEC_PID MEMORY_PRESSURE_WATCH MEMORY_PRESSURE_WRITE; export TERM=xterm-256color COLORTERM=truecolor; exec ~/.ocelot/bin/ocelot service start'
+ExecStart=/bin/zsh -lic 'unset INVOCATION_ID JOURNAL_STREAM MANAGERPID MANAGERPIDFDID SYSTEMD_EXEC_PID MEMORY_PRESSURE_WATCH MEMORY_PRESSURE_WRITE; export TERM=xterm-256color COLORTERM=truecolor; ~/.ocelot/bin/ocelot service start >/dev/null && exec waitpid "$(jq -r .pid ~/.local/state/opencode/service-ocelot.json)"'
 StandardInput=null
-# The server this starts must outlive the oneshot.
+Restart=always
+RestartSec=2
+# The server must outlive a restart of the watcher.
 KillMode=process
+
+[Install]
+WantedBy=default.target
