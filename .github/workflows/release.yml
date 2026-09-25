@@ -41,4 +41,5 @@ jobs:
               git log --format='- %s' "$prev..HEAD"
             fi
           } > notes.md
-          gh release create "v$VERSION" dist/*.tar.gz --title "ocelot $VERSION" --notes-file notes.md
+          cp build/src/install dist/install
+          gh release create "v$VERSION" dist/*.tar.gz dist/install --title "ocelot $VERSION" --notes-file notes.md

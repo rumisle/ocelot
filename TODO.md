@@ -20,27 +20,24 @@ Done:
 - [x] `scripts/build.sh [targets]`: bun 1.4.2 (upstream's pin, auto-downloaded),
       linux-x64 + darwin-arm64 cross-compiled on Linux in ~45 s total, 194 / 172 MB.
       The Mac binary carries bun's ad-hoc code signature.
-- [x] `scripts/install.sh`: ~/.local/bin/ocelot, restarts the service if running.
+- [x] `scripts/install.sh`: ~/.ocelot/bin/ocelot, restarts the service if running.
 - [x] Own channel `ocelot`: own service file, port (46624) and database
       (`opencode-ocelot.db`); config, plugins and auth shared with stock.
-- [x] Patch `ocelot/no-upstream-updates`: the updater would otherwise replace us
-      with stock OpenCode.
+- [x] Patches `ocelot/updates` + `ocelot/installer`: upstream's updater and installer,
+      pointed at our GitHub releases (`~/.ocelot/bin`, `ocelot upgrade`, `autoupdate`).
 - [x] Smoke test: service starts, all four plugins load, a prompt round-trips.
 - [x] CI: `check` (patches apply + export is a no-op), `release` (build + GitHub
       release when the version is new), `bump` (weekly/manual, opens a PR).
 
 Open:
-- [ ] Check CI actually runs green (first push).
-- [ ] `bump` PRs need "Allow GitHub Actions to create pull requests" in repo settings.
-      PRs opened with GITHUB_TOKEN don't trigger `check`; the bump job applies patches itself.
-- [ ] Switch over from stock: move sessions? `opencode-ocelot.db` starts empty. Options:
-      copy `opencode.db` once while both services are stopped, or build with
-      `OPENCODE_DISABLE_CHANNEL_DB` semantics (shared DB; risky once patches touch the schema).
-- [ ] Service hostname for ocelot (`ocelot service set hostname 100.78.68.89`), web UI pairing.
-- [ ] opencode-octopi reads `service.json` only; make it find `service-*.json` by pid.
-      (Goes away with the plugin-API patches.)
+- [x] CI green; v2.0.16-1 released (3.5 min).
+- [x] Actions may open PRs (repo setting, for `bump`).
+      Note: PRs opened with GITHUB_TOKEN don't trigger `check`; the bump job applies patches itself.
+- [x] Switched over: copied `opencode.db` to `opencode-ocelot.db`; stock service stopped.
+- [x] ocelot service on Tailscale: 100.78.68.89:46624.
+- [x] opencode-octopi finds `service-*.json` by pid.
 - [ ] Branding: `--version` says "opencode v2.0.16-1"; web UI title, TUI name.
-- [ ] Install from a release on the Mac (curl + tar; no quarantine that way).
+- [ ] Try the installer on the Mac (curl download, so no quarantine).
 
 ## 1. Plugin API (server)
 

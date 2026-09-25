@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Install the locally built binary for this machine to ~/.local/bin/ocelot
-# (override with OCELOT_BIN_DIR), then restart the ocelot service if it is running.
+# Install the locally built binary for this machine where the release installer puts it,
+# ~/.ocelot/bin/ocelot (override with OCELOT_BIN_DIR), then restart the ocelot service if
+# it is running. Put ~/.ocelot/bin on your PATH (the release installer does that).
 source "$(dirname "$0")/lib.sh"
 
 case "$(uname -s)-$(uname -m)" in
@@ -11,7 +12,7 @@ esac
 bin=$ROOT/dist/ocelot-$target/ocelot
 [ -x "$bin" ] || die "no $bin; run scripts/build.sh first"
 
-dir=${OCELOT_BIN_DIR:-$HOME/.local/bin}
+dir=${OCELOT_BIN_DIR:-$HOME/.ocelot/bin}
 mkdir -p "$dir"
 # Write beside and rename, so a running ocelot keeps its old inode.
 cp "$bin" "$dir/.ocelot.new" && mv -f "$dir/.ocelot.new" "$dir/ocelot"

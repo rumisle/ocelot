@@ -9,16 +9,15 @@ and the web UI) works the same as in OpenCode.
 
 ## Install
 
-Download the archive for your platform from
-[Releases](https://github.com/rumisle/ocelot/releases) and put the `ocelot` binary on
-your `PATH`:
+Linux (x64) and macOS (Apple Silicon):
 
 ```bash
-v=2.0.16-1 target=linux-x64   # or darwin-arm64
-gh release download "v$v" -R rumisle/ocelot -p "ocelot-$v-$target.tar.gz"
-tar -xzf "ocelot-$v-$target.tar.gz"
-install -m 755 "ocelot-$target/ocelot" ~/.local/bin/ocelot
+curl -fsSL https://github.com/rumisle/ocelot/releases/latest/download/install | bash
 ```
+
+This installs `ocelot` to `~/.ocelot/bin` and adds that to your shell's `PATH`.
+For a specific release, append `-s -- --version 2.0.16-1` to `bash`. The archives are also on the
+[Releases](https://github.com/rumisle/ocelot/releases) page.
 
 Then use `ocelot` wherever you would use `opencode`:
 
@@ -37,8 +36,15 @@ It runs its own background server with its own port and session database
 (`~/.local/share/opencode/opencode-ocelot.db`), so it can be installed next to stock
 OpenCode without the two interfering. Sessions from one don't show up in the other.
 
-Ocelot never updates itself from upstream OpenCode; new versions come from this repo's
-releases.
+## Updating
+
+```bash
+ocelot upgrade
+```
+
+Updates come from this repo's releases, never from upstream OpenCode. As in OpenCode,
+the `autoupdate` config option decides what happens when a new release is out:
+`"notify"` (the default) tells you, `true` installs it, `false` does nothing.
 
 ## Versions
 
@@ -54,7 +60,7 @@ Requirements: git and curl. The scripts download the bun version upstream uses.
 scripts/apply.sh                           # build/src = upstream release + our patches
 scripts/build.sh                           # build for this machine
 scripts/build.sh linux-x64 darwin-arm64    # both release targets, cross-compiled
-scripts/install.sh                         # install to ~/.local/bin/ocelot
+scripts/install.sh                         # install to ~/.ocelot/bin/ocelot
 ```
 
 ### Changing patches

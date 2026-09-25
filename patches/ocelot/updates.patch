@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 25 Sep 2026 12:25:13 +0800
+Subject: cli/updater: update from ocelot's GitHub releases
+
+Upstream's updater checks the opencode.ai update service and reinstalls stock
+OpenCode. Point it at ocelot instead: the latest version comes from GitHub
+releases, and the "curl" install method (a binary in ~/.ocelot/bin) re-runs
+ocelot's installer. Package-manager methods are not detected, so an ocelot build
+never upgrades a stock OpenCode install found by npm/bun/brew.
+
+`ocelot upgrade` and the background update (config `autoupdate`: true, "notify",
+false) then work as they do in OpenCode.
+
+Ocelot-Patch: ocelot/updates
+
+diff --git a/packages/cli/src/services/updater.ts b/packages/cli/src/services/updater.ts
+index 20828386c..9844d61da 100644
+--- a/packages/cli/src/services/updater.ts
++++ b/packages/cli/src/services/updater.ts
+@@ -10,6 +10,10 @@ import { RetainedImage } from "./retained-image"
+ import { action, parseReleaseVersion, type Policy } from "./updater-action"
+ import { errorMessage } from "../util/error"
+ 
++// ocelot: where releases and the installer come from.
++const OCELOT_REPO = "rumisle/ocelot"
++const OCELOT_INSTALLER = `https://github.com/${OCELOT_REPO}/releases/latest/download/install`
++
+ export const methods = ["curl", "npm", "pnpm", "bun", "yarn", "vp", "brew"] as const
+ 
+ export type Method = (typeof methods)[number]
+@@ -169,13 +173,16 @@ const make = Effect.gen(function* () {
+ 
+   const curlBinary = path.resolve(
+     global.home,
+-    ".opencode",
++    ".ocelot",
+     "bin",
+-    process.platform === "win32" ? "opencode.exe" : "opencode",
++    process.platform === "win32" ? "ocelot.exe" : "ocelot",
+   )
+ 
+   const method = Effect.fnUntraced(function* () {
+     if (path.resolve(process.execPath) === curlBinary) return "curl"
++    // ocelot: only installs made by ocelot's installer can update; the package-manager checks
++    // below would find (and upgrade) a stock OpenCode install instead.
++    if (OCELOT_REPO) return
+     const executable = yield* fs.realPath(process.execPath).pipe(Effect.orElseSucceed(() => process.execPath))
+     if (
+       ["opencode-beta", "opencode-v2"].some((name) =>
+@@ -232,16 +239,14 @@ const make = Effect.gen(function* () {
+     }
+   }
+ 
+-  const release = Effect.fnUntraced(function* (method?: Method) {
+-    const distribution = method === "brew" ? "homebrew" : "npm"
++  // ocelot: the latest release comes from GitHub instead of the opencode.ai update service.
++  const release = Effect.fnUntraced(function* (_method?: Method) {
+     const response = yield* Effect.tryPromise({
+       try: (signal) =>
+-        fetch(
+-          `https://opencode.ai/update/api/${encodeURIComponent(channel)}/${encodeURIComponent(OPENCODE_ARTIFACT)}/${distribution}?current=${encodeURIComponent(OPENCODE_VERSION)}`,
+-          {
+-            signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+-          },
+-        ),
++        fetch(`https://api.github.com/repos/${OCELOT_REPO}/releases/latest`, {
++          headers: { accept: "application/vnd.github+json" },
++          signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
++        }),
+       catch: (cause) =>
+         new UpgradeError(
+           {
+@@ -260,7 +265,7 @@ const make = Effect.gen(function* () {
+           retry: "Try again in a few minutes.",
+         }),
+       )
+-    const data: { version: string; metadata?: { package?: string } } = yield* Effect.tryPromise({
++    const data: { tag_name?: string } = yield* Effect.tryPromise({
+       try: () => response.json(),
+       catch: (cause) =>
+         new UpgradeError(
+@@ -272,7 +277,7 @@ const make = Effect.gen(function* () {
+           { cause },
+         ),
+     })
+-    if (!data.metadata?.package)
++    if (!data.tag_name)
+       return yield* Effect.fail(
+         new UpgradeError({
+           title: "Could not read the OpenCode update information",
+@@ -280,7 +285,7 @@ const make = Effect.gen(function* () {
+           retry: "Try again in a few minutes.",
+         }),
+       )
+-    return { package: data.metadata.package, version: data.version }
++    return { package: "ocelot", version: data.tag_name.replace(/^v/, "") }
+   })
+ 
+   const latest = () =>
+@@ -389,8 +394,8 @@ const make = Effect.gen(function* () {
+           const installer = path.join(directory, "install")
+           yield* runUpgrade({
+             method,
+-            command: ["curl", "-fsSL", "-o", installer, "https://opencode.ai/v2/install"],
+-            displayCommand: ["curl", "-fsSL", "https://opencode.ai/v2/install"],
++            command: ["curl", "-fsSL", "-o", installer, OCELOT_INSTALLER],
++            displayCommand: ["curl", "-fsSL", OCELOT_INSTALLER],
+             title: "Could not download the OpenCode installer",
+             retry: "Check your network, then run opencode upgrade again.",
+           })
+@@ -399,7 +404,7 @@ const make = Effect.gen(function* () {
+             runUpgrade({
+               method,
+               command: ["bash", installer, "--version", version, "--no-modify-path"],
+-              displayCommand: ["opencode", "upgrade", version, "--method", "curl"],
++              displayCommand: ["ocelot", "upgrade", version, "--method", "curl"],
+               title: "The OpenCode installer failed",
+             }),
+           )

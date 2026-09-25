@@ -1,0 +1,179 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 25 Sep 2026 12:49:48 +0800
+Subject: install: install ocelot from its GitHub releases
+
+Upstream's installer, pointed at ocelot: the latest version and the tarball come
+from GitHub releases, it installs to ~/.ocelot/bin/ocelot, and only the
+linux-x64 and darwin-arm64 builds exist. The release workflow attaches it to
+every release, so it installs with:
+
+  curl -fsSL https://github.com/rumisle/ocelot/releases/latest/download/install | bash
+
+Ocelot-Patch: ocelot/installer
+
+diff --git a/install b/install
+index b17ccfde3..96025499d 100755
+--- a/install
++++ b/install
+@@ -1,7 +1,8 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+-APP=opencode
+-SOURCE_APP=opencode
++APP=ocelot
++SOURCE_APP=ocelot
++REPO=rumisle/ocelot
+ 
+ MUTED='\033[0;2m'
+ RED='\033[0;31m'
+@@ -10,20 +11,20 @@ NC='\033[0m' # No Color
+ 
+ usage() {
+     cat <<EOF
+-OpenCode Installer
++ocelot installer
+ 
+ Usage: install.sh [options]
+ 
+ Options:
+     -h, --help              Display this help message
+-    -v, --version <version> Install a specific version (e.g., 0.0.0-beta-17236)
++    -v, --version <version> Install a specific version (e.g., 2.0.16-1)
+     -b, --binary <path>     Install from a local binary instead of downloading
+         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
+ 
+ Examples:
+-    curl -fsSL https://opencode.ai/v2/install | bash
+-    curl -fsSL https://opencode.ai/v2/install | bash -s -- --version 0.0.0-beta-17236
+-    ./install --binary /path/to/opencode
++    curl -fsSL https://github.com/rumisle/ocelot/releases/latest/download/install | bash
++    curl -fsSL https://github.com/rumisle/ocelot/releases/latest/download/install | bash -s -- --version 2.0.16-1
++    ./install --binary /path/to/ocelot
+ EOF
+ }
+ 
+@@ -66,7 +67,7 @@ while [[ $# -gt 0 ]]; do
+     esac
+ done
+ 
+-INSTALL_DIR=$HOME/.opencode/bin
++INSTALL_DIR=$HOME/.ocelot/bin
+ mkdir -p "$INSTALL_DIR"
+ 
+ # If --binary is provided, skip all download/detection logic
+@@ -102,10 +103,10 @@ else
+ 
+     combo="$os-$arch"
+     case "$combo" in
+-      linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64)
++      linux-x64|darwin-arm64)
+         ;;
+       *)
+-        echo -e "${RED}Unsupported OS/Arch: $os/$arch${NC}"
++        echo -e "${RED}No ocelot build for $os/$arch (available: linux-x64, darwin-arm64)${NC}"
+         exit 1
+         ;;
+     esac
+@@ -166,42 +167,32 @@ else
+         exit 1
+     fi
+ 
+-    package_scope="@opencode"
+     if [ -z "$requested_version" ]; then
+-        metadata=$(curl -fsSL https://opencode.ai/update/api/latest/cli/npm || true)
+-        specific_version=$(echo "$metadata" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+-        package=$(echo "$metadata" | sed -n 's/.*"package":"\([^"]*\)".*/\1/p')
+-
+-        if [ -z "$specific_version" ] || [ -z "$package" ]; then
++        specific_version=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' || true)
++        if [ -z "$specific_version" ]; then
+             echo -e "${RED}Failed to fetch version information${NC}"
+             exit 1
+         fi
+-        package_scope="${package%/cli}"
+     else
+         # Strip leading 'v' if present
+         requested_version="${requested_version#v}"
+         specific_version=$requested_version
+     fi
+ 
+-    package_name="$package_scope/cli-$target"
+-    http_status=$(curl -s -o /dev/null -w "%{http_code}" "https://registry.npmjs.org/$package_scope%2fcli-$target/$specific_version" || true)
+-    # Older clients install the minimum release before they can migrate package names.
+-    if [ "$http_status" = "404" ] && [ -n "$requested_version" ]; then
+-        package_name="@opencode-ai/cli-$target"
+-        http_status=$(curl -s -o /dev/null -w "%{http_code}" "https://registry.npmjs.org/@opencode-ai%2fcli-$target/$specific_version" || true)
+-    fi
++    # Release builds exist for plain linux-x64 and darwin-arm64 only.
++    target="$os-$arch"
++    filename="ocelot-$specific_version-$target.tar.gz"
++    url="https://github.com/$REPO/releases/download/v$specific_version/$filename"
++    http_status=$(curl -sIL -o /dev/null -w "%{http_code}" "$url" || true)
+     if [ "$http_status" = "404" ]; then
+         echo -e "${RED}Error: Version ${specific_version} is not available for $target${NC}"
+-        echo -e "${MUTED}Available versions: https://www.npmjs.com/package/$package_name?activeTab=versions${NC}"
++        echo -e "${MUTED}Available versions: https://github.com/$REPO/releases${NC}"
+         exit 1
+     fi
+     if [ "$http_status" != "200" ]; then
+-        echo -e "${RED}Failed to fetch package information${NC}"
++        echo -e "${RED}Failed to fetch release information${NC}"
+         exit 1
+     fi
+-
+-    filename="cli-$target-$specific_version.tgz"
+-    url="https://registry.npmjs.org/$package_name/-/$filename"
+     binary_name="$SOURCE_APP"
+     if [ "$os" = "windows" ]; then
+         binary_name="$SOURCE_APP.exe"
+@@ -340,7 +331,7 @@ download_and_install() {
+     if [ "$os" = "windows" ]; then
+         installed_binary="$APP.exe"
+     fi
+-    mv "$tmp_dir/package/bin/$binary_name" "$INSTALL_DIR/$installed_binary"
++    mv "$tmp_dir/ocelot-$target/$binary_name" "$INSTALL_DIR/$installed_binary"
+     chmod 755 "$INSTALL_DIR/$installed_binary"
+     rm -rf "$tmp_dir"
+ }
+@@ -384,7 +375,6 @@ else
+     check_version
+     download_and_install
+ fi
+-install_legacy_shim
+ 
+ 
+ add_to_path() {
+@@ -394,9 +384,9 @@ add_to_path() {
+     if grep -Fxq "$command" "$config_file"; then
+         print_message info "Command already exists in $config_file, skipping write."
+     elif [[ -w $config_file ]]; then
+-        echo -e "\n# opencode" >> "$config_file"
++        echo -e "\n# ocelot" >> "$config_file"
+         echo "$command" >> "$config_file"
+-        print_message info "${MUTED}Successfully added ${NC}opencode ${MUTED}to \$PATH in ${NC}$config_file"
++        print_message info "${MUTED}Successfully added ${NC}ocelot ${MUTED}to \$PATH in ${NC}$config_file"
+     else
+         print_message warning "Manually add the directory to $config_file (or similar):"
+         print_message info "  $command"
+@@ -472,17 +462,10 @@ if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
+ fi
+ 
+ echo -e ""
+-echo -e "${MUTED}                    ${NC}             ▄     "
+-echo -e "${MUTED}█▀▀█ █▀▀█ █▀▀█ █▀▀▄ ${NC}█▀▀▀ █▀▀█ █▀▀█ █▀▀█"
+-echo -e "${MUTED}█░░█ █░░█ █▀▀▀ █░░█ ${NC}█░░░ █░░█ █░░█ █▀▀▀"
+-echo -e "${MUTED}▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ ${NC}▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"
+-echo -e ""
+-echo -e ""
+-echo -e "${MUTED}OpenCode includes free models, to start:${NC}"
++echo -e "${MUTED}ocelot is installed. To start:${NC}"
+ echo -e ""
+ echo -e "cd <project>  ${MUTED}# Open directory${NC}"
+-echo -e "opencode      ${MUTED}# Run command${NC}"
+-echo -e ""
+-echo -e "${MUTED}For more information visit ${NC}https://opencode.ai/v2/docs"
++echo -e "ocelot        ${MUTED}# Run command${NC}"
+ echo -e ""
++echo -e "${MUTED}Uses your OpenCode config in ~/.config/opencode. More: ${NC}https://github.com/$REPO"
+ echo -e ""
