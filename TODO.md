@@ -88,6 +88,10 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 ### Mobile
 - [ ] (later) Top bar → two floating buttons; it wastes a lot of vertical space.
 
+- [x] Password prompt in the app: patch `web/password-prompt`. The server sends the Basic challenge
+      only to page loads and non-browser clients; the app asks for a server's password on 401 and
+      saves it (the browser's dialog answer was never saved: iOS home screen apps asked every launch).
+
 ### Plugin UI in the web app
 - [ ] General way for plugins to add UI to the web app (upstream only has TUI plugin slots).
       First users: cache-warmer status/tips like pi's (cache expiry countdown, warm now),
