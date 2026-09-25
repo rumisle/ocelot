@@ -115,9 +115,12 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 
 - [x] ChatGPT-plan OpenAI models keep API prices (upstream zeroed them). Patch `core/subscription-cost`.
 
-## 4. Branching (big patch, last)
+## 4. Branching
 
-- [ ] Pi-style branching within a session: keep the old branch on
-      undo-and-resend instead of deleting messages, with a tree to navigate.
-      Touches session storage, the message projector and revert — the code that
-      changes fastest upstream, so expect conflicts on every rebase.
+- [x] ChatGPT-style branches in one session: sending after an edit/undo parks the old messages
+      as a branch instead of deleting them; "‹ 2/3 ›" on the edited message switches in place.
+      Reverts never touch files. Parked branches live in `_ocelot_branch` (no migration).
+      Patches `core/message-branches`, `web/message-branches`, `tui/message-branches`.
+- [ ] TUI: switch branches from the message actions (list the alternatives, pick one).
+      Today the TUI follows switches made in the web app but can't make them.
+- [ ] Forking stays upstream's `/fork` (web and TUI); no button.

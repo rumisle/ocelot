@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 26 Sep 2026 02:31:00 +0800
+Subject: tui/session: "Edit" in the message actions
+
+The message action was "Revert: undo messages and file changes". Reverts no longer touch
+files and sending keeps the old messages as a branch (patch core/message-branches).
+
+Ocelot-Patch: tui/message-branches
+
+diff --git a/packages/tui/src/routes/session/dialog-message.tsx b/packages/tui/src/routes/session/dialog-message.tsx
+index 117491cc7..3435a95d7 100644
+--- a/packages/tui/src/routes/session/dialog-message.tsx
++++ b/packages/tui/src/routes/session/dialog-message.tsx
+@@ -31,9 +31,10 @@ export function DialogMessage(props: {
+           onSelect: (dialog) => dialog.clear(),
+         },
+         {
+-          title: "Revert",
++          title: "Edit",
+           value: "session.revert",
+-          description: "undo messages and file changes",
++          // ocelot: reverts never touch files, and sending keeps the old messages as a branch.
++          description: "edit from here; files stay, the old messages become a branch",
+           onSelect: (dialog) => {
+             const value = message()
+             if (value?.type === "user") {

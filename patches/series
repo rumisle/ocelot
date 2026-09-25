@@ -15,3 +15,6 @@ web/child-session-cards.patch
 core/session-notices.patch
 web/session-notices.patch
 tui/session-notices.patch
+core/message-branches.patch
+web/message-branches.patch
+tui/message-branches.patch

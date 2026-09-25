@@ -1,0 +1,261 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 26 Sep 2026 02:31:00 +0800
+Subject: session-ui/message: edit button and version switcher
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The revert button on user messages is now "Edit message" (pencil); nothing is lost by using
+it, since sending keeps the old messages as a branch (patch core/message-branches). A message
+that starts a branch shows "‹ 2/3 ›"; the arrows switch the conversation in place. The
+switcher stays visible; the other actions still wait for hover on desktop.
+
+Ocelot-Patch: web/message-branches
+
+diff --git a/packages/app/src/session/composer/region.tsx b/packages/app/src/session/composer/region.tsx
+index a95e3d2eb..b1ff894a3 100644
+--- a/packages/app/src/session/composer/region.tsx
++++ b/packages/app/src/session/composer/region.tsx
+@@ -203,6 +203,7 @@ export function createActiveSessionRegion(input: {
+           if (input.session.data.isChild()) return
+           return revertMessage
+         },
++        branch: revert.branch,
+         openAttachment,
+       } satisfies SessionUserActions,
+     },
+diff --git a/packages/app/src/session/revert.ts b/packages/app/src/session/revert.ts
+index 6a47fa834..a6dae7cc5 100644
+--- a/packages/app/src/session/revert.ts
++++ b/packages/app/src/session/revert.ts
+@@ -1,4 +1,6 @@
+ import type { SessionMessageUser } from "@opencode/client/promise"
++import type { SessionUserBranch } from "@opencode/session-ui/message"
++import { createEffect } from "solid-js"
+ import { useComposerState } from "@/composer/persistence"
+ import { useData } from "@/runtime/server/current"
+ import { useServerSDK } from "@/runtime/server/client"
+@@ -118,7 +120,35 @@ export function createSessionRevert(input: {
+     owner.run(() => input.setActiveMessage(messages.at(-1)))
+   }
+ 
+-  return { to, undo, redo }
++  // ocelot: conversation branches (patch core/message-branches). Sending after an edit keeps
++  // the old messages as a branch; the switcher on the edited message swaps between them.
++  createEffect(() => {
++    const sessionID = input.session.identity.params.id
++    if (sessionID) void data.session.branch.sync(sessionID).catch(() => undefined)
++  })
++  const branch = (messageID: string): SessionUserBranch | undefined => {
++    const sessionID = input.session.identity.params.id
++    if (!sessionID) return
++    const point = data.session.branch.list(sessionID).find((item) => item.messageID === messageID)
++    if (!point) return
++    const index = point.alternatives.findIndex((item) => item.branchID === null)
++    if (index < 0) return
++    const go = (item: (typeof point.alternatives)[number] | undefined) => {
++      const branchID = item?.branchID
++      if (!branchID) return
++      return async () => {
++        await request(() => data.session.branch.switch(sessionID, branchID))
++      }
++    }
++    return {
++      position: index + 1,
++      count: point.alternatives.length,
++      previous: go(point.alternatives[index - 1]),
++      next: go(point.alternatives[index + 1]),
++    }
++  }
++
++  return { to, undo, redo, branch }
+ }
+ 
+ export type SessionRevert = ReturnType<typeof createSessionRevert>
+diff --git a/packages/session-ui/src/actions.ts b/packages/session-ui/src/actions.ts
+index 7b7a4bfdd..af20f435e 100644
+--- a/packages/session-ui/src/actions.ts
++++ b/packages/session-ui/src/actions.ts
+@@ -19,4 +19,15 @@ export type SessionUserAttachmentReference = {
+ export type SessionUserActions = {
+   openAttachment?: (file: PromptFileAttachment) => void
+   revert?: (input: { sessionID: string; messageID: string }) => Promise<void> | void
++  /** ocelot: the version switcher of a user message that starts a conversation branch. */
++  branch?: (messageID: string) => SessionUserBranch | undefined
++}
++
++/** ocelot: where a user message sits among its alternatives (patch core/message-branches). */
++export type SessionUserBranch = {
++  /** 1-based position among the alternatives, oldest first. */
++  position: number
++  count: number
++  previous?: () => Promise<void> | void
++  next?: () => Promise<void> | void
+ }
+diff --git a/packages/session-ui/src/components/message-part.css b/packages/session-ui/src/components/message-part.css
+index c30c36b91..c493bc0a7 100644
+--- a/packages/session-ui/src/components/message-part.css
++++ b/packages/session-ui/src/components/message-part.css
+@@ -216,6 +216,48 @@
+     pointer-events: auto;
+   }
+ 
++  /* ocelot: the version switcher stays visible; only the other actions wait for hover. */
++  [data-slot="user-message-copy-wrapper"][data-branch] {
++    opacity: 1;
++    pointer-events: auto;
++
++    @media (hover: hover) {
++      > :not([data-slot="user-message-branch"]) {
++        opacity: 0;
++        pointer-events: none;
++        transition: opacity 0.15s ease;
++      }
++    }
++  }
++
++  &:hover [data-slot="user-message-copy-wrapper"][data-branch] > *,
++  &:focus-within [data-slot="user-message-copy-wrapper"][data-branch] > * {
++    opacity: 1;
++    pointer-events: auto;
++  }
++
++  [data-slot="user-message-branch"] {
++    display: inline-flex;
++    align-items: center;
++    gap: 2px;
++    user-select: none;
++
++    [data-direction="previous"] svg {
++      transform: rotate(90deg);
++    }
++
++    [data-direction="next"] svg {
++      transform: rotate(-90deg);
++    }
++  }
++
++  [data-slot="user-message-branch-position"] {
++    min-width: 2.5em;
++    text-align: center;
++    font-variant-numeric: tabular-nums;
++    color: var(--v2-text-text-muted);
++  }
++
+   .text-text-strong {
+     color: var(--v2-text-text-base);
+   }
+diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
+index 97427b5bf..c33e862ac 100644
+--- a/packages/session-ui/src/message/current-message.tsx
++++ b/packages/session-ui/src/message/current-message.tsx
+@@ -14,7 +14,12 @@ import {
+ import { CurrentContextToolGroup, CurrentFileToolGroup, ToolDisplay } from "../tools/tool-renderer"
+ import { currentToolError, currentToolInput, currentToolMetadata, currentToolOutput } from "./current-tool-state"
+ 
+-export type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
++export type {
++  SessionUserActions,
++  SessionUserAttachmentReference,
++  SessionUserBranch,
++  SessionUserComment,
++} from "../actions"
+ export { SessionShellMessage } from "../tools/tool-renderer"
+ export { currentContentDefaultOpen } from "./current-tool-state"
+ 
+diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
+index 16a5c6386..f77588ce7 100644
+--- a/packages/session-ui/src/message/message-content.tsx
++++ b/packages/session-ui/src/message/message-content.tsx
+@@ -54,7 +54,7 @@ export async function writeClipboard(text: string): Promise<boolean> {
+ 
+ function MessageActionButton(
+   props: Pick<ComponentProps<"button">, "disabled" | "onMouseDown" | "onClick" | "aria-label"> & {
+-    icon: "check" | "copy" | "reset"
++    icon: "check" | "copy" | "reset" | "edit"
+     label: JSX.Element
+   },
+ ) {
+@@ -211,7 +211,17 @@ export function CurrentUserMessageDisplay(props: {
+ }) {
+   const dialog = useDialog()
+   const i18n = useI18n()
+-  const [state, setState] = createStore({ copied: false, reverting: false })
++  const [state, setState] = createStore({ copied: false, reverting: false, switching: false })
++  const branch = createMemo(() => props.actions?.branch?.(props.message.id))
++  const switchBranch = async (go: (() => Promise<void> | void) | undefined) => {
++    if (!go || state.switching) return
++    setState("switching", true)
++    try {
++      await go()
++    } finally {
++      setState("switching", false)
++    }
++  }
+   const attachments = createMemo(() => (props.message.files ?? []).filter(attached))
+   const references = createMemo(() => props.references ?? [])
+   const inlineFiles = createMemo(() => (props.message.files ?? []).filter((file) => !!file.mention))
+@@ -297,10 +307,45 @@ export function CurrentUserMessageDisplay(props: {
+       </Show>
+       {renderAttachments()}
+       <Show when={props.text || comments().length > 0}>
+-        <div data-slot="user-message-copy-wrapper">
++        <div data-slot="user-message-copy-wrapper" data-branch={branch() ? "" : undefined}>
++          <Show when={branch()}>
++            {(current) => (
++              <div data-slot="user-message-branch">
++                <IconButton
++                  data-direction="previous"
++                  icon={<Icon name="chevron-down" size="small" />}
++                  size="normal"
++                  variant="ghost-muted"
++                  disabled={!current().previous || state.switching}
++                  onMouseDown={(event) => event.preventDefault()}
++                  onClick={(event) => {
++                    event.stopPropagation()
++                    void switchBranch(current().previous)
++                  }}
++                  aria-label={i18n.t("ui.message.branchPrevious")}
++                />
++                <span data-slot="user-message-branch-position">
++                  {current().position}/{current().count}
++                </span>
++                <IconButton
++                  data-direction="next"
++                  icon={<Icon name="chevron-down" size="small" />}
++                  size="normal"
++                  variant="ghost-muted"
++                  disabled={!current().next || state.switching}
++                  onMouseDown={(event) => event.preventDefault()}
++                  onClick={(event) => {
++                    event.stopPropagation()
++                    void switchBranch(current().next)
++                  }}
++                  aria-label={i18n.t("ui.message.branchNext")}
++                />
++              </div>
++            )}
++          </Show>
+           <Show when={props.actions?.revert}>
+             <MessageActionButton
+-              icon="reset"
++              icon="edit"
+               label={i18n.t("ui.message.revertMessage")}
+               disabled={state.reverting}
+               onMouseDown={(event) => event.preventDefault()}
+diff --git a/packages/ui/src/i18n/en.ts b/packages/ui/src/i18n/en.ts
+index 8af5fbf46..be2f3b224 100644
+--- a/packages/ui/src/i18n/en.ts
++++ b/packages/ui/src/i18n/en.ts
+@@ -241,7 +241,9 @@ const source = {
+   "ui.message.copy": "Copy",
+   "ui.message.copyMessage": "Copy message",
+   "ui.message.forkMessage": "Fork to new session",
+-  "ui.message.revertMessage": "Revert message",
++  "ui.message.revertMessage": "Edit message",
++  "ui.message.branchPrevious": "Previous version",
++  "ui.message.branchNext": "Next version",
+   "ui.message.copyResponse": "Copy response",
+   "ui.message.copied": "Copied",
+   "ui.message.thought": "Thought",

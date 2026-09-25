@@ -1,0 +1,1318 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 26 Sep 2026 02:31:00 +0800
+Subject: core/session: conversation branches instead of destructive reverts
+
+Committing a revert (sending after an edit or /undo) used to delete every message from the
+boundary on. They are now parked as a branch hanging off the message before the boundary, and
+GET /api/session/:id/branch lists the branch points visible from the current history (the
+user message that shows the switcher and every alternative, oldest first). POST
+/api/session/:id/branch/switch swaps a parked branch in for the messages after its anchor,
+which are parked in turn (event session.branch.switched), so one session holds a tree of
+conversations while the model always sees one linear history. Refused while the session runs.
+
+Parked rows keep their ids and seqs, so a restored branch cannot collide with the rows left in
+the session, and branches off messages inside a parked branch come back with it. They live in
+_ocelot_branch, created on first use: the migrator leaves underscore-prefixed tables to
+embedders, so there is no migration to conflict with upstream. Deleting a session deletes its
+branches (foreign key).
+
+Reverts no longer touch files: staging captures and restores nothing, so the conversation and
+the working tree are independent (snapshots still feed the per-turn diffs). A revert staged by
+an older version still puts its files back when cleared.
+
+The shared client store (web app and TUI) keeps branch points per session and reloads the
+messages when a branch is switched elsewhere.
+
+Ocelot-Patch: core/message-branches
+
+diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
+index dd3c6929c..8c12bccc9 100644
+--- a/packages/client/src/effect/api/api.ts
++++ b/packages/client/src/effect/api/api.ts
+@@ -371,6 +371,26 @@ export type SessionRevertCommitOperation<E = never> = (
+   input: SessionRevertCommitInput,
+ ) => Effect.Effect<SessionRevertCommitOutput, E>
+ 
++export type SessionBranchListInput = { readonly sessionID: Session.ID }
++export type SessionBranchListOutput = ReadonlyArray<{
++  readonly messageID: SessionMessage.ID
++  readonly anchor: SessionMessage.ID | null
++  readonly alternatives: ReadonlyArray<{
++    readonly branchID: string | null
++    readonly text: string
++    readonly time: number
++  }>
++}>
++export type SessionBranchListOperation<E = never> = (
++  input: SessionBranchListInput,
++) => Effect.Effect<SessionBranchListOutput, E>
++
++export type SessionBranchSwitchInput = { readonly sessionID: Session.ID; readonly branchID: string }
++export type SessionBranchSwitchOutput = { readonly switched: boolean }
++export type SessionBranchSwitchOperation<E = never> = (
++  input: SessionBranchSwitchInput,
++) => Effect.Effect<SessionBranchSwitchOutput, E>
++
+ export type SessionContextInput = { readonly sessionID: Session.ID }
+ export type SessionContextOutput = ReadonlyArray<SessionMessage.Info>
+ export type SessionContextOperation<E = never> = (input: SessionContextInput) => Effect.Effect<SessionContextOutput, E>
+@@ -1346,6 +1366,20 @@ export type SessionLogOutput =
+             | undefined
+           readonly data: { readonly sessionID: Session.ID; readonly to: SessionMessage.ID }
+         }
++      | {
++          readonly id: Event.ID
++          readonly created: number
++          readonly metadata?: { readonly [x: string]: unknown } | undefined
++          readonly type: "session.branch.switched"
++          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
++          readonly location?:
++            | {
++                readonly directory: AbsolutePath
++                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
++              }
++            | undefined
++          readonly data: { readonly sessionID: Session.ID; readonly branchID: string; readonly parkID: string }
++        }
+       | {
+           readonly id: Event.ID
+           readonly created: number
+@@ -1488,6 +1522,7 @@ export interface SessionApi<E = never> {
+     readonly clear: SessionRevertClearOperation<E>
+     readonly commit: SessionRevertCommitOperation<E>
+   }
++  readonly branch: { readonly list: SessionBranchListOperation<E>; readonly switch: SessionBranchSwitchOperation<E> }
+   readonly context: SessionContextOperation<E>
+   readonly diff: SessionDiffOperation<E>
+   readonly inbox: {
+diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
+index 95afdbd67..563920ff9 100644
+--- a/packages/client/src/effect/generated/client.ts
++++ b/packages/client/src/effect/generated/client.ts
+@@ -66,6 +66,10 @@ import type {
+   SessionRevertClearOutput,
+   SessionRevertCommitInput,
+   SessionRevertCommitOutput,
++  SessionBranchListInput,
++  SessionBranchListOutput,
++  SessionBranchSwitchInput,
++  SessionBranchSwitchOutput,
+   SessionContextInput,
+   SessionContextOutput,
+   SessionDiffInput,
+@@ -594,6 +598,25 @@ const EndpointSessionRevertCommit = (raw: RawClient["server.session"]) => (input
+     raw["session.revert.commit"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
+   )
+ 
++const EndpointSessionBranchList = (raw: RawClient["server.session"]) => (input: SessionBranchListInput) =>
++  preserveEffect<SessionBranchListOutput>()(
++    raw["session.branch.list"]({ params: { sessionID: input["sessionID"] } }).pipe(
++      Effect.mapError(mapClientError),
++      Effect.map((value) => value.data),
++    ),
++  )
++
++const EndpointSessionBranchSwitch = (raw: RawClient["server.session"]) => (input: SessionBranchSwitchInput) =>
++  preserveEffect<SessionBranchSwitchOutput>()(
++    raw["session.branch.switch"]({
++      params: { sessionID: input["sessionID"] },
++      payload: { branchID: input["branchID"] },
++    }).pipe(
++      Effect.mapError(mapClientError),
++      Effect.map((value) => value.data),
++    ),
++  )
++
+ const EndpointSessionContext = (raw: RawClient["server.session"]) => (input: SessionContextInput) =>
+   preserveEffect<SessionContextOutput>()(
+     raw["session.context"]({ params: { sessionID: input["sessionID"] } }).pipe(
+@@ -787,6 +810,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
+     clear: EndpointSessionRevertClear(raw),
+     commit: EndpointSessionRevertCommit(raw),
+   },
++  branch: { list: EndpointSessionBranchList(raw), switch: EndpointSessionBranchSwitch(raw) },
+   context: EndpointSessionContext(raw),
+   diff: EndpointSessionDiff(raw),
+   inbox: {
+diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
+index eb77a2aeb..c155f9410 100644
+--- a/packages/client/src/promise/generated/client.ts
++++ b/packages/client/src/promise/generated/client.ts
+@@ -60,6 +60,10 @@ import type {
+   SessionRevertClearOutput,
+   SessionRevertCommitInput,
+   SessionRevertCommitOutput,
++  SessionBranchListInput,
++  SessionBranchListOutput,
++  SessionBranchSwitchInput,
++  SessionBranchSwitchOutput,
+   SessionContextInput,
+   SessionContextOutput,
+   SessionDiffInput,
+@@ -848,6 +852,31 @@ export function make(options: ClientOptions) {
+             requestOptions,
+           ),
+       },
++      branch: {
++        list: (input: SessionBranchListInput, requestOptions?: RequestOptions) =>
++          request<{ readonly data: SessionBranchListOutput }>(
++            {
++              method: "GET",
++              path: `/api/session/${encodeURIComponent(input.sessionID)}/branch`,
++              successStatus: 200,
++              declaredStatuses: [400, 401, 404],
++              empty: false,
++            },
++            requestOptions,
++          ).then((value) => value.data),
++        switch: (input: SessionBranchSwitchInput, requestOptions?: RequestOptions) =>
++          request<{ readonly data: SessionBranchSwitchOutput }>(
++            {
++              method: "POST",
++              path: `/api/session/${encodeURIComponent(input.sessionID)}/branch/switch`,
++              body: { branchID: input["branchID"] },
++              successStatus: 200,
++              declaredStatuses: [400, 401, 404, 409],
++              empty: false,
++            },
++            requestOptions,
++          ).then((value) => value.data),
++      },
+       context: (input: SessionContextInput, requestOptions?: RequestOptions) =>
+         request<{ readonly data: SessionContextOutput }>(
+           {
+diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
+index 2e35667de..eae113613 100644
+--- a/packages/client/src/promise/generated/types.ts
++++ b/packages/client/src/promise/generated/types.ts
+@@ -849,6 +849,16 @@ export type SessionRevertCommitted = {
+   data: { sessionID: string; to: string }
+ }
+ 
++export type SessionBranchSwitched = {
++  id: string
++  created: number
++  metadata?: { [x: string]: any }
++  type: "session.branch.switched"
++  durable: { aggregateID: string; seq: number; version: 1 }
++  location?: LocationRef
++  data: { sessionID: string; branchID: string; parkID: string }
++}
++
+ export type SessionUsageRecorded = {
+   id: string
+   created: number
+@@ -2386,6 +2396,7 @@ export type SessionEventDurable =
+   | SessionRevertStaged
+   | SessionRevertCleared
+   | SessionRevertCommitted
++  | SessionBranchSwitched
+   | SessionUsageRecorded
+   | SessionMessageContentUpdated
+ 
+@@ -2456,6 +2467,7 @@ export type V2Event =
+   | SessionRevertStaged
+   | SessionRevertCleared
+   | SessionRevertCommitted
++  | SessionBranchSwitched
+   | FilesystemChanged
+   | ReferenceUpdated
+   | PermissionAsked
+@@ -4560,6 +4572,23 @@ export type SessionRevertCommitInput = { readonly sessionID: { readonly sessionI
+ 
+ export type SessionRevertCommitOutput = void
+ 
++export type SessionBranchListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
++
++export type SessionBranchListOutput = {
++  data: Array<{
++    messageID: string
++    anchor: string | null
++    alternatives: Array<{ branchID: string | null; text: string; time: number }>
++  }>
++}["data"]
++
++export type SessionBranchSwitchInput = {
++  readonly sessionID: { readonly sessionID: string }["sessionID"]
++  readonly branchID: { readonly branchID: string }["branchID"]
++}
++
++export type SessionBranchSwitchOutput = { data: { switched: boolean } }["data"]
++
+ export type SessionContextInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+ 
+ export type SessionContextOutput = { data: Array<SessionMessageInfo> }["data"]
+diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
+index f1f6b256d..f8cb4254d 100644
+--- a/packages/client/src/solid/data.ts
++++ b/packages/client/src/solid/data.ts
+@@ -31,6 +31,7 @@ import type {
+   SessionInfo,
+   SessionInboxInfo,
+   SessionInboxCompaction,
++  SessionBranchListOutput,
+   ShellInfo,
+   SkillInfo,
+   VcsInfo,
+@@ -118,6 +119,8 @@ type Store = {
+     permission: Record<string, PermissionRequest[]>
+     // Pending forms keyed by owner: a session ID or the temporary "global" elicitation sentinel.
+     form: Record<string, FormWithLocation[]>
++    // ocelot: conversation branch points, loaded on demand (patch core/message-branches).
++    branch: Record<string, SessionBranchListOutput>
+   }
+   project: {
+     info: Record<string, Project>
+@@ -237,6 +240,7 @@ export function createData(config: CreateDataInput) {
+       pending: {},
+       permission: {},
+       form: {},
++      branch: {},
+     },
+     project: {
+       info: {},
+@@ -574,9 +578,11 @@ export function createData(config: CreateDataInput) {
+     sync.invalidate(`session.message:${sessionID}`)
+     sync.invalidate(`session.permission:${sessionID}`)
+     sync.invalidate(`session.form:${sessionID}:`)
++    sync.invalidate(`session.branch:${sessionID}`)
+     setStore(
+       "session",
+       produce((draft) => {
++        delete draft.branch[sessionID]
+         delete draft.info[sessionID]
+         delete draft.active[sessionID]
+         delete draft.message[sessionID]
+@@ -1117,6 +1123,23 @@ export function createData(config: CreateDataInput) {
+           if (position === -1) return
+           for (const item of draft.splice(position)) index.delete(item.id)
+         })
++        // ocelot: the reverted messages became a branch.
++        if (sync.has(`session.branch:${event.data.sessionID}`)) {
++          sync.invalidate(`session.branch:${event.data.sessionID}`)
++          refresh(() => result.session.branch.sync(event.data.sessionID))
++        }
++        return
++      // ocelot: another branch took the place of the messages after its anchor; reload them.
++      case "session.branch.switched":
++        sync.invalidate(`session.message:${event.data.sessionID}`)
++        refresh(() => result.session.message.sync(event.data.sessionID))
++        if (sync.has(`session.branch:${event.data.sessionID}`)) {
++          sync.invalidate(`session.branch:${event.data.sessionID}`)
++          refresh(() => result.session.branch.sync(event.data.sessionID))
++        }
++        if (!store.session.info[event.data.sessionID] && !sync.has(`session:${event.data.sessionID}`)) return
++        result.session.invalidate(event.data.sessionID)
++        refresh(() => result.session.sync(event.data.sessionID))
+         return
+       case "session.compaction.delta":
+         message.update(event.data.sessionID, (draft) => {
+@@ -1423,6 +1446,21 @@ export function createData(config: CreateDataInput) {
+           )
+         },
+       },
++      // ocelot: conversation branches (patch core/message-branches).
++      branch: {
++        list(sessionID: string) {
++          return store.session.branch[sessionID] ?? []
++        },
++        sync(sessionID: string) {
++          return sync.run(`session.branch:${sessionID}`, async () => {
++            const points = await api().session.branch.list({ sessionID })
++            setStore("session", "branch", sessionID, points)
++          })
++        },
++        switch(sessionID: string, branchID: string) {
++          return api().session.branch.switch({ sessionID, branchID })
++        },
++      },
+       pending: {
+         list(sessionID: string) {
+           return store.session.pending[sessionID] ?? []
+diff --git a/packages/core/src/session.ts b/packages/core/src/session.ts
+index c2c2fd73d..09e8e24a5 100644
+--- a/packages/core/src/session.ts
++++ b/packages/core/src/session.ts
+@@ -229,6 +229,11 @@ export interface Interface {
+     readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError | Snapshot.Error>
+     readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError>
+   }
++  /** ocelot: conversation branches; see SessionBranch. */
++  readonly branch: {
++    readonly list: (sessionID: SessionSchema.ID) => ReturnType<Session.Handle["branch"]["list"]>
++    readonly switch: (input: { sessionID: SessionSchema.ID; branchID: string }) => ReturnType<Session.Handle["branch"]["switch"]>
++  }
+ }
+ 
+ export class Service extends Context.Service<Service, Interface>()("@opencode/Session") {}
+@@ -462,6 +467,10 @@ const layer = Layer.effect(
+         clear: (sessionID) => sessions.forSession(sessionID).revert.clear(),
+         commit: (sessionID) => sessions.forSession(sessionID).revert.commit(),
+       },
++      branch: {
++        list: (sessionID) => sessions.forSession(sessionID).branch.list(),
++        switch: (input) => sessions.forSession(input.sessionID).branch.switch(input),
++      },
+     })
+ 
+     return result
+diff --git a/packages/core/src/session/branch.ts b/packages/core/src/session/branch.ts
+new file mode 100644
+index 000000000..812e83dbb
+--- /dev/null
++++ b/packages/core/src/session/branch.ts
+@@ -0,0 +1,223 @@
++export * as SessionBranch from "./branch.js"
++
++/**
++ * ocelot: conversation branches. Committing a revert (sending after an edit or undo) used to
++ * delete every message from the boundary on; instead they are parked here as a branch that
++ * hangs off the message just before the boundary (its anchor). Switching to a parked branch
++ * swaps it with the session's current messages after that anchor, so one session holds a tree
++ * of conversations while the model always sees a single linear history. Files are never
++ * touched.
++ *
++ * Parked rows keep their ids and seqs. Every row after an anchor belongs to one branch, so
++ * restoring a branch can never collide with the rows left in the session, and branches that
++ * hang off messages inside a parked branch come back with it (nested edits).
++ *
++ * The table is underscore-prefixed: the migrator leaves such tables to embedders, so it needs
++ * no migration and survives upstream schema changes.
++ */
++
++import { and, asc, eq, gt, lt } from "drizzle-orm"
++import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
++import { sql } from "drizzle-orm"
++import { Effect } from "effect"
++import type { Database } from "../database/database.js"
++import type { SessionMessage } from "./message.js"
++import type { SessionSchema } from "./schema.js"
++import { SessionMessageTable } from "./sql.js"
++
++type Db = Database.Interface["db"]
++type Row = typeof SessionMessageTable.$inferSelect
++
++export const BranchTable = sqliteTable("_ocelot_branch", {
++  id: text().primaryKey(),
++  session_id: text().$type<SessionSchema.ID>().notNull(),
++  /** The message the branch hangs off; null when it starts the session. */
++  anchor: text().$type<SessionMessage.ID>(),
++  /** When the branch's first message was created, which orders the alternatives. */
++  time_created: integer().notNull(),
++  rows: text({ mode: "json" }).$type<Row[]>().notNull(),
++})
++
++const ready = new WeakSet<object>()
++const ensure = Effect.fnUntraced(function* (db: Db) {
++  if (ready.has(db)) return
++  yield* db.run(
++    sql`CREATE TABLE IF NOT EXISTS _ocelot_branch (
++      id TEXT PRIMARY KEY,
++      session_id TEXT NOT NULL REFERENCES session_v2(id) ON DELETE CASCADE,
++      anchor TEXT,
++      time_created INTEGER NOT NULL,
++      rows TEXT NOT NULL
++    )`,
++  ).pipe(Effect.orDie)
++  yield* db.run(sql`CREATE INDEX IF NOT EXISTS _ocelot_branch_session_idx ON _ocelot_branch (session_id)`).pipe(Effect.orDie)
++  ready.add(db)
++})
++
++const rowsAfter = (db: Db, sessionID: SessionSchema.ID, seq: number) =>
++  db
++    .select()
++    .from(SessionMessageTable)
++    .where(and(eq(SessionMessageTable.session_id, sessionID), gt(SessionMessageTable.seq, seq)))
++    .orderBy(asc(SessionMessageTable.seq))
++    .all()
++
++const anchorBefore = (db: Db, sessionID: SessionSchema.ID, seq: number) =>
++  db
++    .select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
++    .from(SessionMessageTable)
++    .where(and(eq(SessionMessageTable.session_id, sessionID), lt(SessionMessageTable.seq, seq)))
++    .orderBy(sql`${SessionMessageTable.seq} desc`)
++    .limit(1)
++    .get()
++
++const anchorSeq = Effect.fnUntraced(function* (db: Db, sessionID: SessionSchema.ID, anchor: string | null) {
++  if (anchor === null) return -1
++  const row = yield* db
++    .select({ seq: SessionMessageTable.seq })
++    .from(SessionMessageTable)
++    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, anchor as SessionMessage.ID)))
++    .get()
++    .pipe(Effect.orDie)
++  return row?.seq
++})
++
++/** Park every message from `boundarySeq` on as branch `id`. Runs inside the revert commit projection. */
++export const park = Effect.fnUntraced(function* (
++  db: Db,
++  input: { id: string; sessionID: SessionSchema.ID; boundarySeq: number },
++) {
++  yield* ensure(db)
++  const rows = yield* rowsAfter(db, input.sessionID, input.boundarySeq - 1).pipe(Effect.orDie)
++  if (rows.length === 0) return
++  const anchor = yield* anchorBefore(db, input.sessionID, input.boundarySeq).pipe(Effect.orDie)
++  yield* db
++    .insert(BranchTable)
++    .values({
++      id: input.id,
++      session_id: input.sessionID,
++      anchor: anchor?.id ?? null,
++      time_created: rows[0]!.time_created,
++      rows,
++    })
++    .onConflictDoNothing()
++    .run()
++    .pipe(Effect.orDie)
++})
++
++/**
++ * Swap branch `branchID` in: park the session's messages after its anchor as `parkID`, then
++ * restore the branch's rows. Returns false when the branch is gone or no longer hangs off a
++ * message of this session.
++ */
++export const swap = Effect.fnUntraced(function* (
++  db: Db,
++  input: { sessionID: SessionSchema.ID; branchID: string; parkID: string },
++) {
++  yield* ensure(db)
++  const branch = yield* db
++    .select()
++    .from(BranchTable)
++    .where(and(eq(BranchTable.id, input.branchID), eq(BranchTable.session_id, input.sessionID)))
++    .get()
++    .pipe(Effect.orDie)
++  if (!branch) return false
++  const seq = yield* anchorSeq(db, input.sessionID, branch.anchor)
++  if (seq === undefined) return false
++  const current = yield* rowsAfter(db, input.sessionID, seq).pipe(Effect.orDie)
++  if (current.length > 0) {
++    yield* db
++      .insert(BranchTable)
++      .values({
++        id: input.parkID,
++        session_id: input.sessionID,
++        anchor: branch.anchor,
++        time_created: current[0]!.time_created,
++        rows: current,
++      })
++      .run()
++      .pipe(Effect.orDie)
++    yield* db
++      .delete(SessionMessageTable)
++      .where(and(eq(SessionMessageTable.session_id, input.sessionID), gt(SessionMessageTable.seq, seq)))
++      .run()
++      .pipe(Effect.orDie)
++  }
++  for (let start = 0; start < branch.rows.length; start += 500)
++    yield* db
++      .insert(SessionMessageTable)
++      .values(branch.rows.slice(start, start + 500).map((row) => ({ ...row, session_id: input.sessionID })))
++      .run()
++      .pipe(Effect.orDie)
++  yield* db.delete(BranchTable).where(eq(BranchTable.id, branch.id)).run().pipe(Effect.orDie)
++  return true
++})
++
++export interface Alternative {
++  /** The parked branch to switch to; null for the session's current messages. */
++  readonly branchID: string | null
++  /** The branch's first prompt. */
++  readonly text: string
++  readonly time: number
++}
++
++export interface Point {
++  /** The first user message after the anchor in the current history, which shows the switcher. */
++  readonly messageID: SessionMessage.ID
++  readonly anchor: SessionMessage.ID | null
++  /** Oldest first; the current branch is the one with branchID null. */
++  readonly alternatives: readonly Alternative[]
++}
++
++const firstPrompt = (rows: readonly Row[]) => {
++  const row = rows.find((item) => item.type === "user")
++  const text = row ? (row.data as { text?: unknown }).text : undefined
++  return { row, text: typeof text === "string" ? text : "" }
++}
++
++/** Branch points visible from the session's current history. */
++export const points = Effect.fnUntraced(function* (db: Db, sessionID: SessionSchema.ID) {
++  yield* ensure(db)
++  const branches = yield* db
++    .select()
++    .from(BranchTable)
++    .where(eq(BranchTable.session_id, sessionID))
++    .orderBy(asc(BranchTable.time_created))
++    .all()
++    .pipe(Effect.orDie)
++  const anchors = new Map<string | null, (typeof branches)[number][]>()
++  for (const branch of branches) {
++    const list = anchors.get(branch.anchor) ?? []
++    list.push(branch)
++    anchors.set(branch.anchor, list)
++  }
++  const result: (Point & { seq: number })[] = []
++  for (const [anchor, parked] of anchors) {
++    const seq = yield* anchorSeq(db, sessionID, anchor)
++    if (seq === undefined) continue
++    const current = yield* db
++      .select()
++      .from(SessionMessageTable)
++      .where(
++        and(
++          eq(SessionMessageTable.session_id, sessionID),
++          gt(SessionMessageTable.seq, seq),
++          eq(SessionMessageTable.type, "user"),
++        ),
++      )
++      .orderBy(asc(SessionMessageTable.seq))
++      .limit(1)
++      .get()
++      .pipe(Effect.orDie)
++    if (!current) continue
++    const alternatives: Alternative[] = parked.map((branch) => ({
++      branchID: branch.id,
++      text: firstPrompt(branch.rows).text,
++      time: branch.time_created,
++    }))
++    alternatives.push({ branchID: null, text: firstPrompt([current]).text, time: current.time_created })
++    alternatives.sort((a, b) => a.time - b.time)
++    result.push({ messageID: current.id, anchor: anchor as SessionMessage.ID | null, alternatives, seq })
++  }
++  return result.sort((a, b) => a.seq - b.seq).map(({ seq: _, ...point }): Point => point)
++})
+diff --git a/packages/core/src/session/message-updater.ts b/packages/core/src/session/message-updater.ts
+index d0a084f87..ac7348ad0 100644
+--- a/packages/core/src/session/message-updater.ts
++++ b/packages/core/src/session/message-updater.ts
+@@ -499,6 +499,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
+       "session.revert.staged": () => Effect.void,
+       "session.revert.cleared": () => Effect.void,
+       "session.revert.committed": () => Effect.void,
++      "session.branch.switched": () => Effect.void,
+     }),
+   )
+   return project(event)
+diff --git a/packages/core/src/session/projector.ts b/packages/core/src/session/projector.ts
+index 665c6d0c9..5ab4bbd3d 100644
+--- a/packages/core/src/session/projector.ts
++++ b/packages/core/src/session/projector.ts
+@@ -14,6 +14,7 @@ import { SessionMessageUpdater } from "./message-updater.js"
+ import { SessionInbox } from "./inbox.js"
+ import { Workspace } from "@opencode/schema/workspace"
+ import { InstructionState } from "./instruction-state.js"
++import { SessionBranch } from "./branch.js"
+ import { SessionInboxTable, SessionMessageTable, SessionTable } from "./sql.js"
+ import { InstructionEntry } from "./instruction-entry.js"
+ import { Slug } from "../util/slug.js"
+@@ -773,6 +774,8 @@ const layer = Layer.effectDiscard(
+           .get()
+           .pipe(Effect.orDie)
+         if (!boundary) return yield* Effect.die(new Error(`Revert boundary message not found: ${event.data.to}`))
++        // ocelot: keep the reverted messages as a branch the user can switch back to.
++        yield* SessionBranch.park(db, { id: `brn_${event.id}`, sessionID: event.data.sessionID, boundarySeq: boundary.seq })
+         yield* db
+           .delete(SessionMessageTable)
+           .where(
+@@ -799,6 +802,19 @@ const layer = Layer.effectDiscard(
+         yield* InstructionState.reset(db, event.data.sessionID)
+       }),
+     )
++    // ocelot: swap a parked branch in; a staged revert belongs to the history being parked.
++    yield* bus.project(SessionEvent.BranchEvent.Switched, (event) =>
++      Effect.gen(function* () {
++        if (!(yield* SessionBranch.swap(db, event.data))) return
++        yield* db
++          .update(SessionTable)
++          .set({ revert: null, time_updated: event.created })
++          .where(eq(SessionTable.id, event.data.sessionID))
++          .run()
++          .pipe(Effect.orDie)
++        yield* InstructionState.reset(db, event.data.sessionID)
++      }),
++    )
+     yield* bus.subscribe([SessionEvent.Step.Ended, SessionEvent.Step.Failed, SessionEvent.UsageRecorded, SessionEvent.Notice]).pipe(
+       Stream.runForEach((event) => {
+         if (
+diff --git a/packages/core/src/session/revert.ts b/packages/core/src/session/revert.ts
+index aaf8405ef..75ceae925 100644
+--- a/packages/core/src/session/revert.ts
++++ b/packages/core/src/session/revert.ts
+@@ -31,17 +31,23 @@ export const stage = Effect.fn("SessionRevert.stage")(function* (input: {
+ 
+   return yield* Effect.gen(function* () {
+     const snapshot = yield* Snapshot.Service
++    // ocelot: a revert never touches files (the conversation and the working tree are
++    // independent; committed reverts become branches). Only a revert staged by an older
++    // version still has files to put back.
++    const touch = false as boolean
+     const original = input.session.revert?.snapshot
+       ? Snapshot.ID.make(input.session.revert.snapshot)
+-      : yield* snapshot.capture()
++      : touch
++        ? yield* snapshot.capture()
++        : undefined
+     const next = yield* plan(database.db, { sessionID: input.session.id, messageID: input.messageID })
+     const restore = new Map<RelativePath, Snapshot.ID>()
+     if (original) {
+       for (const file of input.session.revert?.files ?? []) restore.set(RelativePath.make(file.file), original)
+     }
+-    if (input.files !== false) for (const [file, tree] of next) restore.set(file, tree)
++    if (touch && input.files !== false) for (const [file, tree] of next) restore.set(file, tree)
+     if (restore.size) yield* snapshot.restore({ files: restore })
+-    const paths = input.files === false ? [] : Array.from(next.keys())
++    const paths = !touch || input.files === false ? [] : Array.from(next.keys())
+     const files = original
+       ? yield* snapshot.diff({ from: original, to: (yield* snapshot.capture()) ?? original, paths })
+       : []
+diff --git a/packages/core/src/session/session.ts b/packages/core/src/session/session.ts
+index 9aab9912e..3eaadc4b1 100644
+--- a/packages/core/src/session/session.ts
++++ b/packages/core/src/session/session.ts
+@@ -26,6 +26,7 @@ import { SessionInbox } from "./inbox.js"
+ import { SessionMessage } from "./message.js"
+ import { SessionPrompt } from "./prompt.js"
+ import { SessionRevert } from "./revert.js"
++import { SessionBranch } from "./branch.js"
+ import { SessionShell } from "./shell.js"
+ import { SessionSkill } from "./skill.js"
+ import { SessionSchema } from "./schema.js"
+@@ -367,6 +368,28 @@ export const make = Effect.fn("Session.make")(function* () {
+     return yield* SessionRevert.commit(bus, session)
+   })
+   const revert = { stage, clear, commit }
++  // ocelot: conversation branches (SessionBranch).
++  const branches = Effect.fn("Session.branch.list")(function* (sessionID: SessionSchema.ID) {
++    yield* get(sessionID)
++    return yield* SessionBranch.points(database.db, sessionID)
++  })
++  const switchBranch = Effect.fn("Session.branch.switch")(function* (
++    sessionID: SessionSchema.ID,
++    input: { branchID: string },
++  ) {
++    yield* get(sessionID)
++    if (yield* execution.isActive(sessionID)) return yield* new BusyError({ sessionID })
++    const points = yield* SessionBranch.points(database.db, sessionID)
++    if (!points.some((point) => point.alternatives.some((item) => item.branchID === input.branchID)))
++      return { switched: false }
++    yield* bus.publish(SessionEvent.BranchEvent.Switched, {
++      sessionID,
++      branchID: input.branchID,
++      parkID: `brn_${SessionMessage.ID.create().replace(/^msg_/, "")}`,
++    })
++    return { switched: true }
++  })
++  const branch = { list: branches, switch: switchBranch }
+   const operations = {
+     get,
+     message,
+@@ -390,6 +413,7 @@ export const make = Effect.fn("Session.make")(function* () {
+     steerInbox,
+     queueInbox,
+     revert,
++    branch,
+   }
+ 
+   const forSession = (sessionID: SessionSchema.ID) => {
+@@ -418,6 +442,10 @@ export const make = Effect.fn("Session.make")(function* () {
+     const clear = operations.revert.clear.bind(undefined, sessionID)
+     const commit = operations.revert.commit.bind(undefined, sessionID)
+     const revert = { stage, clear, commit }
++    const branch = {
++      list: operations.branch.list.bind(undefined, sessionID),
++      switch: operations.branch.switch.bind(undefined, sessionID),
++    }
+ 
+     return {
+       id: sessionID,
+@@ -443,6 +471,7 @@ export const make = Effect.fn("Session.make")(function* () {
+       steerInbox,
+       queueInbox,
+       revert,
++      branch,
+     }
+   }
+   return { forSession }
+diff --git a/packages/core/test/session-owned.test.ts b/packages/core/test/session-owned.test.ts
+index 327071b56..00e380161 100644
+--- a/packages/core/test/session-owned.test.ts
++++ b/packages/core/test/session-owned.test.ts
+@@ -732,7 +732,8 @@ describe("Session-owned handles", () => {
+       yield* handle.revert.stage({ messageID: boundary.id, files: false })
+       yield* handle.revert.clear()
+ 
+-      expect(captures).toEqual([source, destination])
++      // ocelot: reverts never touch files, so staging captures nothing.
++      expect(captures).toEqual([])
+       expect(fixture.locations).toEqual([source, destination, destination])
+       expect(fixture.activationWaits).toEqual([])
+       expect((yield* handle.get()).revert).toBeUndefined()
+@@ -766,7 +767,8 @@ describe("SessionPrompt preparation", () => {
+ })
+ 
+ describe("SessionRevert operations", () => {
+-  it.live("captures snapshots when staging and restores them when clearing", () =>
++  // ocelot: reverts never touch files: no capture when staging, nothing to restore when clearing.
++  it.live("leaves snapshots alone when staging and clearing", () =>
+     Effect.gen(function* () {
+       const calls: string[] = []
+       const fixture = yield* setup({
+@@ -796,15 +798,16 @@ describe("SessionRevert operations", () => {
+       yield* SessionRevert.stage({ session, messageID: boundary.id, files: false }).pipe(
+         Effect.provideService(Instance.Service, fixture.instances),
+       )
+-      expect(calls).toEqual(["capture", "capture", "diff"])
++      expect(calls).toEqual([])
+ 
+       const staged = yield* handle.get()
+-      expect(staged.revert?.snapshot).toBe(Snapshot.ID.make("captured-tree"))
++      expect(staged.revert?.messageID).toBe(boundary.id)
++      expect(staged.revert?.snapshot).toBeUndefined()
+       yield* SessionRevert.clear(staged).pipe(Effect.provideService(Instance.Service, fixture.instances))
+       const cleared = yield* handle.get()
+       expect(cleared.revert).toBeUndefined()
+       yield* SessionRevert.clear(cleared).pipe(Effect.provideService(Instance.Service, fixture.instances))
+-      expect(calls).toEqual(["capture", "capture", "diff", "restore"])
++      expect(calls).toEqual([])
+     }),
+   )
+ })
+diff --git a/packages/core/test/session-revert.test.ts b/packages/core/test/session-revert.test.ts
+index bc3906857..6638afb5d 100644
+--- a/packages/core/test/session-revert.test.ts
++++ b/packages/core/test/session-revert.test.ts
+@@ -3,6 +3,7 @@ import { describe, expect } from "bun:test"
+ import fs from "fs/promises"
+ import path from "path"
+ import { Effect } from "effect"
++import { sql } from "drizzle-orm"
+ import { Agent } from "@opencode/core/agent"
+ import { Bus } from "@opencode/core/bus"
+ import { Database } from "@opencode/core/database/database"
+@@ -41,7 +42,7 @@ const it = testEffect(
+ 
+ describe("Session.revert files", () => {
+   it.live(
+-    "undoes and restores a file rename without losing either path",
++    "leaves files alone (ocelot)",
+     () =>
+       Effect.gen(function* () {
+         const tmp = yield* tmpdirScoped()
+@@ -91,27 +92,17 @@ describe("Session.revert files", () => {
+             files: yield* snapshot.files({ from: before, to: after }),
+           })
+ 
+-          yield* Effect.promise(() => Bun.write(path.join(directory, "unrelated.txt"), "Keep this later edit.\n"))
++          // ocelot: a revert never touches files; the rename stays and nothing is listed.
+           const reverted = yield* session.revert.stage({ sessionID: created.id, messageID: prompt.id })
+           expect({
+             original: yield* Effect.promise(() => Bun.file(original).exists()),
+             renamed: yield* Effect.promise(() => Bun.file(renamed).exists()),
+-          }).toEqual({ original: true, renamed: false })
+-          expect(yield* Effect.promise(() => Bun.file(original).text())).toBe("Preserve this content.\n")
+-          expect(reverted.files?.map((file) => [file.file, file.status])).toEqual([
+-            ["new name.txt", "deleted"],
+-            ["old name.txt", "added"],
+-          ])
+-          expect(yield* Effect.promise(() => Bun.file(path.join(directory, "unrelated.txt")).text())).toBe(
+-            "Keep this later edit.\n",
+-          )
++          }).toEqual({ original: false, renamed: true })
++          expect(reverted.files ?? []).toEqual([])
+ 
+           yield* session.revert.clear(created.id)
+           expect(yield* Effect.promise(() => Bun.file(original).exists())).toBe(false)
+           expect(yield* Effect.promise(() => Bun.file(renamed).text())).toBe("Preserve this content.\n")
+-          expect(yield* Effect.promise(() => Bun.file(path.join(directory, "unrelated.txt")).text())).toBe(
+-            "Keep this later edit.\n",
+-          )
+           expect((yield* session.get(created.id)).revert).toBeUndefined()
+         }).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
+       }),
+@@ -119,3 +110,107 @@ describe("Session.revert files", () => {
+     { timeout: 15_000 },
+   )
+ })
++
++// ocelot: committing a revert parks the reverted messages as a branch instead of deleting them.
++describe("Session branches", () => {
++  it.live(
++    "edit keeps the old messages as a branch; switching swaps them, nested branches follow",
++    () =>
++      Effect.gen(function* () {
++        const tmp = yield* tmpdirScoped()
++        const session = yield* Session.Service
++        const database = yield* Database.Service
++        const bus = yield* Bus.Service
++        const created = yield* session.create({ location: { directory: AbsolutePath.make(tmp.path) } })
++        const sessionID = created.id
++
++        yield* Effect.gen(function* () {
++          const plugins = yield* Plugin.Service
++          yield* plugins.awaitActivation
++          const turn = Effect.fnUntraced(function* (text: string) {
++            const prompt = yield* session.prompt({ sessionID, text, resume: false })
++            yield* SessionInbox.promote(database.db, bus, sessionID, "steer")
++            const assistantMessageID = SessionMessage.ID.create()
++            yield* bus.publish(SessionEvent.Step.Started, {
++              sessionID,
++              assistantMessageID,
++              agent: Agent.defaultID,
++              model: { id: Model.ID.make("test-model"), providerID: Provider.ID.make("test-provider") },
++              started: 0,
++            })
++            yield* bus.publish(SessionEvent.Step.Ended, {
++              sessionID,
++              assistantMessageID,
++              finish: "stop",
++              cost: Money.USD.zero,
++              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
++            })
++            return { user: prompt.id, assistant: assistantMessageID }
++          })
++          const prompts = Effect.fnUntraced(function* () {
++            const messages = yield* session.context(sessionID)
++            return messages.flatMap((message) => (message.type === "user" ? [message.text] : []))
++          })
++          const edit = Effect.fnUntraced(function* (messageID: SessionMessage.ID, text: string) {
++            yield* session.revert.stage({ sessionID, messageID })
++            return yield* turn(text)
++          })
++          const shape = Effect.fnUntraced(function* () {
++            return (yield* session.branch.list(sessionID)).map((point) =>
++              point.alternatives.map((item) => (item.branchID === null ? `*${item.text}` : item.text)),
++            )
++          })
++          const switchTo = Effect.fnUntraced(function* (text: string) {
++            const points = yield* session.branch.list(sessionID)
++            const target = points.flatMap((point) => point.alternatives).find((item) => item.text === text)
++            if (!target?.branchID) throw new Error(`no parked branch ${text}`)
++            expect((yield* session.branch.switch({ sessionID, branchID: target.branchID })).switched).toBe(true)
++          })
++
++          const one = yield* turn("one")
++          const two = yield* turn("two")
++          yield* turn("three")
++          expect(yield* shape()).toEqual([])
++
++          // Edit "two": "two" and "three" are parked, not deleted.
++          const twoB = yield* edit(two.user, "two B")
++          expect(yield* prompts()).toEqual(["one", "two B"])
++          const points = yield* session.branch.list(sessionID)
++          expect(points.map((point) => [point.messageID, point.anchor])).toEqual([[twoB.user, one.assistant]])
++          expect(yield* shape()).toEqual([["two", "*two B"]])
++
++          // Switch back: the old messages return with their ids; the edit is parked.
++          yield* switchTo("two")
++          expect(yield* prompts()).toEqual(["one", "two", "three"])
++          expect((yield* session.context(sessionID)).some((message) => message.id === two.user)).toBe(true)
++          expect(yield* shape()).toEqual([["*two", "two B"]])
++
++          // A nested edit inside the old branch, then away and back: the nested point follows.
++          const three = (yield* session.context(sessionID)).findLast((message) => message.type === "user")!
++          yield* edit(three.id, "three B")
++          expect(yield* shape()).toEqual([["*two", "two B"], ["three", "*three B"]])
++          yield* switchTo("two B")
++          expect(yield* prompts()).toEqual(["one", "two B"])
++          expect(yield* shape()).toEqual([["two", "*two B"]])
++          yield* switchTo("two")
++          expect(yield* prompts()).toEqual(["one", "two", "three B"])
++          expect(yield* shape()).toEqual([["*two", "two B"], ["three", "*three B"]])
++
++          // The next turn continues the restored history.
++          yield* turn("four")
++          expect(yield* prompts()).toEqual(["one", "two", "three B", "four"])
++
++          // A stale or foreign branch id is refused.
++          expect((yield* session.branch.switch({ sessionID, branchID: "brn_missing" })).switched).toBe(false)
++
++          // Deleting the session deletes its branches.
++          yield* session.remove(sessionID)
++          const left = yield* database.db.all<{ n: number }>(
++            sql`SELECT count(*) AS n FROM _ocelot_branch WHERE session_id = ${sessionID}`,
++          )
++          expect(left[0]?.n).toBe(0)
++        }).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
++      }),
++    { timeout: 15_000 },
++  )
++})
+diff --git a/packages/protocol/openapi.json b/packages/protocol/openapi.json
+index 486de02f3..788b59060 100644
+--- a/packages/protocol/openapi.json
++++ b/packages/protocol/openapi.json
+@@ -3197,6 +3197,248 @@
+         "summary": "Commit staged revert"
+       }
+     },
++    "/api/session/{sessionID}/branch": {
++      "get": {
++        "tags": ["session"],
++        "operationId": "session.branch.list",
++        "parameters": [
++          {
++            "name": "sessionID",
++            "in": "path",
++            "schema": {
++              "type": "string",
++              "pattern": "^ses"
++            },
++            "required": true
++          }
++        ],
++        "security": [],
++        "responses": {
++          "200": {
++            "description": "Success",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "type": "object",
++                  "properties": {
++                    "data": {
++                      "type": "array",
++                      "items": {
++                        "type": "object",
++                        "properties": {
++                          "messageID": {
++                            "type": "string",
++                            "pattern": "^msg_"
++                          },
++                          "anchor": {
++                            "anyOf": [
++                              {
++                                "type": "string",
++                                "pattern": "^msg_"
++                              },
++                              {
++                                "type": "null"
++                              }
++                            ]
++                          },
++                          "alternatives": {
++                            "type": "array",
++                            "items": {
++                              "type": "object",
++                              "properties": {
++                                "branchID": {
++                                  "anyOf": [
++                                    {
++                                      "type": "string"
++                                    },
++                                    {
++                                      "type": "null"
++                                    }
++                                  ]
++                                },
++                                "text": {
++                                  "type": "string"
++                                },
++                                "time": {
++                                  "anyOf": [
++                                    {
++                                      "type": "number"
++                                    },
++                                    {
++                                      "type": "string",
++                                      "enum": ["Infinity", "-Infinity", "NaN"]
++                                    }
++                                  ]
++                                }
++                              },
++                              "required": ["branchID", "text", "time"],
++                              "additionalProperties": false
++                            }
++                          }
++                        },
++                        "required": ["messageID", "anchor", "alternatives"],
++                        "additionalProperties": false
++                      }
++                    }
++                  },
++                  "required": ["data"],
++                  "additionalProperties": false
++                }
++              }
++            }
++          },
++          "400": {
++            "description": "InvalidRequestError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
++                }
++              }
++            }
++          },
++          "401": {
++            "description": "UnauthorizedError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
++                }
++              }
++            }
++          },
++          "404": {
++            "description": "SessionNotFoundError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "anyOf": [
++                    {
++                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
++                    },
++                    {
++                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
++                    }
++                  ]
++                }
++              }
++            }
++          }
++        },
++        "description": "Messages in the current history that have alternatives: the user message that starts each, and every alternative oldest first (branchID null is the current one).",
++        "summary": "List branch points"
++      }
++    },
++    "/api/session/{sessionID}/branch/switch": {
++      "post": {
++        "tags": ["session"],
++        "operationId": "session.branch.switch",
++        "parameters": [
++          {
++            "name": "sessionID",
++            "in": "path",
++            "schema": {
++              "type": "string",
++              "pattern": "^ses"
++            },
++            "required": true
++          }
++        ],
++        "security": [],
++        "responses": {
++          "200": {
++            "description": "Success",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "type": "object",
++                  "properties": {
++                    "data": {
++                      "type": "object",
++                      "properties": {
++                        "switched": {
++                          "type": "boolean"
++                        }
++                      },
++                      "required": ["switched"],
++                      "additionalProperties": false
++                    }
++                  },
++                  "required": ["data"],
++                  "additionalProperties": false
++                }
++              }
++            }
++          },
++          "400": {
++            "description": "InvalidRequestError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
++                }
++              }
++            }
++          },
++          "401": {
++            "description": "UnauthorizedError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
++                }
++              }
++            }
++          },
++          "404": {
++            "description": "SessionNotFoundError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "anyOf": [
++                    {
++                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
++                    },
++                    {
++                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
++                    }
++                  ]
++                }
++              }
++            }
++          },
++          "409": {
++            "description": "SessionBusyError",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/SessionBusyErrorEncoded"
++                }
++              }
++            }
++          }
++        },
++        "description": "Swap a parked branch in for the current messages after its anchor, which are parked in turn. Files are not touched.",
++        "summary": "Switch branch",
++        "requestBody": {
++          "content": {
++            "application/json": {
++              "schema": {
++                "type": "object",
++                "properties": {
++                  "branchID": {
++                    "type": "string"
++                  }
++                },
++                "required": ["branchID"],
++                "additionalProperties": false
++              }
++            }
++          },
++          "required": true
++        }
++      }
++    },
+     "/api/session/{sessionID}/context": {
+       "get": {
+         "tags": ["session"],
+diff --git a/packages/protocol/src/groups/session.ts b/packages/protocol/src/groups/session.ts
+index 1fc15544b..a5d112d0f 100644
+--- a/packages/protocol/src/groups/session.ts
++++ b/packages/protocol/src/groups/session.ts
+@@ -593,6 +593,50 @@ export const makeSessionGroup = <
+           OpenApi.annotations({ identifier: "session.revert.commit", summary: "Commit staged revert" }),
+         ),
+     )
++    .add(
++      // ocelot: conversation branches. Committing a revert parks the reverted messages as a branch.
++      HttpApiEndpoint.get("session.branch.list", "/api/session/:sessionID/branch", {
++        params: { sessionID: Session.ID },
++        success: Schema.Struct({
++          data: Schema.Array(
++            Schema.Struct({
++              messageID: SessionMessage.ID,
++              anchor: Schema.NullOr(SessionMessage.ID),
++              alternatives: Schema.Array(
++                Schema.Struct({ branchID: Schema.NullOr(Schema.String), text: Schema.String, time: Schema.Number }),
++              ),
++            }),
++          ),
++        }),
++        error: SessionNotFoundError,
++      })
++        .middleware(sessionLocationMiddleware)
++        .annotateMerge(
++          OpenApi.annotations({
++            identifier: "session.branch.list",
++            summary: "List branch points",
++            description:
++              "Messages in the current history that have alternatives: the user message that starts each, and every alternative oldest first (branchID null is the current one).",
++          }),
++        ),
++    )
++    .add(
++      HttpApiEndpoint.post("session.branch.switch", "/api/session/:sessionID/branch/switch", {
++        params: { sessionID: Session.ID },
++        payload: Schema.Struct({ branchID: Schema.String }),
++        success: Schema.Struct({ data: Schema.Struct({ switched: Schema.Boolean }) }),
++        error: [SessionNotFoundError, SessionBusyError],
++      })
++        .middleware(sessionLocationMiddleware)
++        .annotateMerge(
++          OpenApi.annotations({
++            identifier: "session.branch.switch",
++            summary: "Switch branch",
++            description:
++              "Swap a parked branch in for the current messages after its anchor, which are parked in turn. Files are not touched.",
++          }),
++        ),
++    )
+     .add(
+       HttpApiEndpoint.get("session.context", "/api/session/:sessionID/context", {
+         params: { sessionID: Session.ID },
+diff --git a/packages/schema/src/session-event.ts b/packages/schema/src/session-event.ts
+index 1733b2892..bbba8a85e 100644
+--- a/packages/schema/src/session-event.ts
++++ b/packages/schema/src/session-event.ts
+@@ -675,6 +675,18 @@ export namespace RevertEvent {
+   })
+ }
+ 
++/**
++ * ocelot: switch the conversation to a parked branch (see core's SessionBranch). The messages
++ * after the branch's anchor are parked as parkID and the branch's messages take their place.
++ */
++export namespace BranchEvent {
++  export const Switched = Event.durable({
++    type: "session.branch.switched",
++    ...options,
++    schema: { ...Base, branchID: Schema.String, parkID: Schema.String },
++  })
++}
++
+ export const Definitions = Event.inventory(
+   Created,
+   AgentSelected,
+@@ -726,6 +738,7 @@ export const Definitions = Event.inventory(
+   RevertEvent.Staged,
+   RevertEvent.Cleared,
+   RevertEvent.Committed,
++  BranchEvent.Switched,
+ )
+ 
+ // Internal and replay-only events are excluded from the public manifest.
+diff --git a/packages/server/src/handlers/session.ts b/packages/server/src/handlers/session.ts
+index 0d7ed39a4..a929ac447 100644
+--- a/packages/server/src/handlers/session.ts
++++ b/packages/server/src/handlers/session.ts
+@@ -513,6 +513,30 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
+           return HttpApiSchema.NoContent.make()
+         }),
+       )
++      .handle(
++        "session.branch.list",
++        Effect.fn(function* (ctx) {
++          return {
++            data: yield* session.branch
++              .list(ctx.params.sessionID)
++              .pipe(Effect.catchTag("Session.NotFoundError", missingSession)),
++          }
++        }),
++      )
++      .handle(
++        "session.branch.switch",
++        Effect.fn(function* (ctx) {
++          yield* Effect.log("session.branch.switch", { sessionID: ctx.params.sessionID, branchID: ctx.payload.branchID })
++          return {
++            data: yield* session.branch
++              .switch({ sessionID: ctx.params.sessionID, branchID: ctx.payload.branchID })
++              .pipe(
++                Effect.catchTag("Session.NotFoundError", missingSession),
++                Effect.catchTag("Session.BusyError", busySession),
++              ),
++          }
++        }),
++      )
+       .handle(
+         "session.context",
+         Effect.fn(function* (ctx) {
