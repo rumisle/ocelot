@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 26 Sep 2026 00:16:49 +0800
+Subject: core/codemode: record the child sessions nested calls drive
+
+A tool called from Code Mode that starts or drives a child session says so the way the
+subagent tool does, with sessionID (or sessionIDs) in its progress or result metadata.
+The execute call now records those IDs on the nested call's row
+(metadata.toolCalls[i].sessionIDs), so clients can show the child sessions under the
+Code Mode run. Only session IDs are kept, not the rest of the nested metadata, so the
+rows stay small. Nested progress still passes through as before.
+
+Ocelot-Patch: core/codemode-child-sessions
+
+diff --git a/packages/core/src/codemode/tool.ts b/packages/core/src/codemode/tool.ts
+index 74742f649..910d7d6d7 100644
+--- a/packages/core/src/codemode/tool.ts
++++ b/packages/core/src/codemode/tool.ts
+@@ -25,6 +25,8 @@ const ExecuteCall = Schema.Struct({
+   tool: Schema.String,
+   status: Schema.Literals(["running", "completed", "error"]),
+   input: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
++  // ocelot: child sessions the call started or drove, from its metadata's sessionID / sessionIDs.
++  sessionIDs: Schema.optionalKey(Schema.Array(Schema.String)),
+ })
+ 
+ type ExecuteCall = typeof ExecuteCall.Type
+@@ -87,12 +89,21 @@ export const create = (
+           lock.withPermit(
+             Ref.updateAndGet(calls, update).pipe(Effect.tap((toolCalls) => context.progress({ toolCalls }))),
+           )
++        const progress = progressHooks(record)
+         const result = yield* runtime(
+           inventory,
+           (name, tool, input) =>
+             Effect.gen(function* () {
+               const index = yield* Ref.getAndUpdate(callIndex, (index) => index + 1)
+-              const executed = yield* executeTool(name, tool, input, context)
++              // ocelot: child sessions a nested call names in its progress or result metadata
++              // (sessionID / sessionIDs) are also recorded on its row.
++              const nested = {
++                ...context,
++                progress: (update: Metadata) =>
++                  context.progress(update).pipe(Effect.andThen(progress.sessions(input, update))),
++              }
++              const executed = yield* executeTool(name, tool, input, nested)
++              if (executed.metadata) yield* progress.sessions(input, executed.metadata)
+               const content =
+                 typeof executed.content === "string"
+                   ? [{ type: "text" as const, text: executed.content }]
+@@ -104,7 +115,7 @@ export const create = (
+               const text = content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+               return text === "" ? null : text
+             }),
+-          progressHooks(record),
++          progress.hooks,
+         ).execute(code)
+         const toolCalls = yield* Ref.get(calls)
+         const collected = (yield* Ref.get(files))
+@@ -142,11 +153,29 @@ export const create = (
+ // Rows appear in start order; the same call object arrives at both hooks, so a call finds its row again.
+ function progressHooks(record: (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) => Effect.Effect<unknown>) {
+   const rows = new WeakMap<object, number>()
++  // ocelot: the tool receives the same input object the hook saw, which finds the row again.
++  const inputs = new WeakMap<object, object>()
+   const start = (call: object, entry: ExecuteCall) =>
+     record((items) => {
+       rows.set(call, items.length)
+       return [...items, entry]
+     })
++  const sessions = (input: unknown, metadata: Metadata) => {
++    const call = typeof input === "object" && input !== null ? inputs.get(input) : undefined
++    const index = call === undefined ? undefined : rows.get(call)
++    const found = [
++      ...(typeof metadata.sessionID === "string" ? [metadata.sessionID] : []),
++      ...(Array.isArray(metadata.sessionIDs) ? metadata.sessionIDs.filter((id) => typeof id === "string") : []),
++    ]
++    if (index === undefined || found.length === 0) return Effect.void
++    return record((items) => {
++      const next = [...items]
++      const known = items[index].sessionIDs ?? []
++      const added = found.filter((id) => !known.includes(id))
++      if (added.length > 0) next[index] = { ...items[index], sessionIDs: [...known, ...added] }
++      return next
++    }).pipe(Effect.asVoid)
++  }
+   const settle = (call: object, result: CodeMode.CallResult) => {
+     const index = rows.get(call)
+     if (index === undefined) return Effect.void
+@@ -156,8 +185,9 @@ function progressHooks(record: (update: (items: Array<ExecuteCall>) => Array<Exe
+       return next
+     })
+   }
+-  return {
++  const hooks = {
+     "tool.before": (call) => {
++      if (typeof call.input === "object" && call.input !== null) inputs.set(call.input, call)
+       const shown = displayInput(call.input)
+       return start(call, { tool: call.name, status: "running", ...(shown ? { input: shown } : {}) })
+     },
+@@ -173,6 +203,7 @@ function progressHooks(record: (update: (items: Array<ExecuteCall>) => Array<Exe
+     },
+     "extension.after": settle,
+   } satisfies CodeMode.Hooks
++  return { hooks, sessions }
+ }
+ 
+ export const catalog = (inventory: Inventory) => {
+diff --git a/packages/core/test/tool-execute.test.ts b/packages/core/test/tool-execute.test.ts
+index 59ab70d56..b545acb96 100644
+--- a/packages/core/test/tool-execute.test.ts
++++ b/packages/core/test/tool-execute.test.ts
+@@ -145,3 +145,54 @@ test("execute supports callable namespace tools", async () => {
+   })
+   expect(result.content).toEqual([{ type: "text", text: '[\n  "admin",\n  "created"\n]' }])
+ })
++
++// ocelot: nested calls report the child sessions they drive on their own row.
++test("execute keeps nested calls' child sessions on their rows", async () => {
++  const input = Schema.Struct({ name: Schema.String })
++  const spawn: Info = {
++    name: "spawn",
++    description: "Start a child session",
++    input,
++    output: Schema.String,
++    options: { namespace: "workers" },
++    execute: ({ name }: { name: string }, context) =>
++      Effect.gen(function* () {
++        yield* context.progress({ sessionID: `ses_${name}`, noise: "x".repeat(10) })
++        return { output: name, metadata: { sessionID: `ses_${name}`, sessionIDs: [`ses_${name}`, "ses_other"] } }
++      }),
++  } as Info
++  const plain: Info = {
++    name: "plain",
++    description: "No sessions",
++    input: Schema.Struct({}),
++    output: Schema.String,
++    options: { namespace: "workers" },
++    execute: (_, context) =>
++      context.progress({ other: 1 }).pipe(Effect.as({ output: "ok", metadata: { other: 1 } })),
++  }
++  const progress: unknown[] = []
++  const result = await Effect.runPromise(
++    createCodeMode(
++      new Map([
++        ["workers_spawn", spawn],
++        ["workers_plain", plain],
++      ]),
++    ).execute(
++      {
++        code: 'return Promise.all([tools.workers.spawn({ name: "a" }), tools.workers.spawn({ name: "b" }), tools.workers.plain({})])',
++      },
++      { ...context, progress: (update) => Effect.sync(() => void progress.push(update)) },
++    ),
++  )
++
++  expect(result.metadata).toEqual({
++    toolCalls: [
++      { tool: "workers.spawn", status: "completed", input: { name: "a" }, sessionIDs: ["ses_a", "ses_other"] },
++      { tool: "workers.spawn", status: "completed", input: { name: "b" }, sessionIDs: ["ses_b", "ses_other"] },
++      { tool: "workers.plain", status: "completed" },
++    ],
++  })
++  // Nested progress still passes through, and the rows follow it with the sessions recorded.
++  expect(progress).toContainEqual({ sessionID: "ses_a", noise: "xxxxxxxxxx" })
++  expect(progress.at(-1)).toEqual({ toolCalls: (result.metadata as { toolCalls: unknown }).toolCalls })
++})

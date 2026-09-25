@@ -1,0 +1,340 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 26 Sep 2026 00:16:49 +0800
+Subject: session-ui: subagent cards for child sessions a Code Mode run drove
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The subagent tool's card moves into ChildSessionCard: spinner while the child session
+runs, its name and task, and a tap opens the child session's live transcript. The
+subagent tool renders it as before. An execute row whose nested calls recorded child
+sessions (patch core/codemode-child-sessions; octopi workers) shows one card per child
+session under the code, titled from the session title ("name · task"). Such an execute
+call is placed like a subagent call in the timeline (the "Subagents" category).
+
+Ocelot-Patch: web/child-session-cards
+
+diff --git a/packages/session-ui/src/components/basic-tool.css b/packages/session-ui/src/components/basic-tool.css
+index 1346efdb6..8bd027ec0 100644
+--- a/packages/session-ui/src/components/basic-tool.css
++++ b/packages/session-ui/src/components/basic-tool.css
+@@ -460,3 +460,15 @@
+     }
+   }
+ }
++
++/* ocelot: child session cards under a Code Mode run (octopi workers). */
++[data-slot="execute-child-sessions"] {
++  display: flex;
++  flex-direction: column;
++  gap: 4px;
++  margin-top: 4px;
++}
++
++[data-component="task-tool-card"] [data-component="task-tool-title"][data-literal] {
++  text-transform: none;
++}
+diff --git a/packages/session-ui/src/message/current-tool-state.ts b/packages/session-ui/src/message/current-tool-state.ts
+index 0cf9028da..6585458b1 100644
+--- a/packages/session-ui/src/message/current-tool-state.ts
++++ b/packages/session-ui/src/message/current-tool-state.ts
+@@ -81,3 +81,22 @@ export function currentContentDefaultOpen(
+   if (!Array.isArray(files) || files.length === 0) return true
+   return !files.every((file) => !!file && typeof file === "object" && "status" in file && file.status === "deleted")
+ }
++
++/**
++ * ocelot: a Code Mode run whose nested calls drove child sessions (octopi workers). It shows a
++ * card per child session and is placed like a subagent call rather than a shell command.
++ */
++export function executeDrivesSessions(content: SessionMessageAssistant["content"][number]) {
++  if (content.type !== "tool" || content.name !== "execute") return false
++  const calls = currentToolMetadata(content).toolCalls
++  return (
++    Array.isArray(calls) &&
++    calls.some(
++      (call) =>
++        !!call &&
++        typeof call === "object" &&
++        Array.isArray((call as { sessionIDs?: unknown }).sessionIDs) &&
++        (call as { sessionIDs: unknown[] }).sessionIDs.length > 0,
++    )
++  )
++}
+diff --git a/packages/session-ui/src/timeline/detail.ts b/packages/session-ui/src/timeline/detail.ts
+index 0c4b00532..4d886da10 100644
+--- a/packages/session-ui/src/timeline/detail.ts
++++ b/packages/session-ui/src/timeline/detail.ts
+@@ -1,5 +1,5 @@
+ import type { SessionMessageAssistant, SessionMessageInfo } from "@opencode/client/promise"
+-import { shellResultFailed } from "../message/current-tool-state"
++import { executeDrivesSessions, shellResultFailed } from "../message/current-tool-state"
+ 
+ export const timelineCategories = ["shell", "edit", "thinking", "subagents", "notices", "tools"] as const
+ export type TimelineCategory = (typeof timelineCategories)[number]
+@@ -92,6 +92,7 @@ export function timelineCategory(
+ ): keyof TimelineDetail | undefined {
+   if (content.type === "text") return
+   if (content.type === "reasoning") return "thinking"
++  if (executeDrivesSessions(content)) return "subagents"
+   if (["shell", "execute", "bash"].includes(content.name)) return "shell"
+   if (["edit", "write", "patch", "apply_patch"].includes(content.name)) return "edit"
+   if (["subagent", "task"].includes(content.name)) return "subagents"
+diff --git a/packages/session-ui/src/tools/tool-renderer.tsx b/packages/session-ui/src/tools/tool-renderer.tsx
+index ba3f90844..be2494089 100644
+--- a/packages/session-ui/src/tools/tool-renderer.tsx
++++ b/packages/session-ui/src/tools/tool-renderer.tsx
+@@ -1547,6 +1547,128 @@ ToolRegistry.register({
+     )
+   },
+ })
++// The subagent card, shared with Code Mode calls that drive child sessions (ocelot).
++// Spins while the call or the child session runs; opens the child session's live transcript.
++function ChildSessionCard(props: {
++  sessionID: string | undefined
++  status?: string
++  title: string
++  subtitle?: string
++  tone?: string
++  v2Tone?: string
++  /** Show the title as written instead of capitalized (worker names). */
++  literal?: boolean
++}) {
++  const data = useData()
++  const running = createMemo(() => {
++    if (props.status === "streaming" || props.status === "running") return true
++    const id = props.sessionID
++    if (!id) return false
++    return (data.store.session_status[id]?.type ?? "idle") !== "idle"
++  })
++
++  const href = createMemo(() => sessionLink(props.sessionID, data.sessionHref))
++  const clickable = createMemo(() => !!(props.sessionID && (data.navigateToSession || href())))
++
++  const open = () => {
++    const id = props.sessionID
++    if (!id) return
++    data.navigateToSession?.(id)
++  }
++
++  const navigate = (event: MouseEvent) => {
++    if (!data.navigateToSession) return
++    if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
++    event.preventDefault()
++    open()
++  }
++  const navigateKey = (event: KeyboardEvent) => {
++    if (!clickable() || href()) return
++    if (event.key !== "Enter" && event.key !== " ") return
++    event.preventDefault()
++    open()
++  }
++
++  const trigger = () => (
++    <div
++      data-component="task-tool-card"
++      style={{
++        "--task-agent-color": props.v2Tone,
++        "--task-agent-color-fallback": props.tone,
++      }}
++    >
++      <div data-component="task-tool-surface">
++        <div data-slot="basic-tool-tool-info-structured">
++          <div data-slot="basic-tool-tool-info-main">
++            <Show
++              when={running()}
++              fallback={
++                <span data-component="task-tool-icon">
++                  <Icon name="subagent" size="small" />
++                </span>
++              }
++            >
++              <span data-component="task-tool-spinner" style={{ color: props.tone ?? "var(--icon-interactive-base)" }}>
++                <SessionProgressIndicatorV2
++                  style={{ color: props.v2Tone ?? "light-dark(var(--v2-text-text-base), #ffffff)" }}
++                />
++              </span>
++            </Show>
++            <span data-component="task-tool-title" data-literal={props.literal ? "" : undefined}>
++              {props.title}
++            </span>
++            <Show when={props.subtitle}>
++              <span data-slot="basic-tool-tool-subtitle">{props.subtitle}</span>
++            </Show>
++          </div>
++          <Show when={clickable()}>
++            <div data-component="task-tool-action">
++              <Icon name="chevron-right" size="normal" />
++            </div>
++          </Show>
++        </div>
++      </div>
++    </div>
++  )
++
++  return (
++    <BasicTool
++      icon="task"
++      status={props.status}
++      trigger={trigger()}
++      hideDetails
++      triggerAsLink
++      triggerHref={href()}
++      clickable={clickable()}
++      onTriggerClick={navigate}
++      onTriggerKeyDown={navigateKey}
++    />
++  )
++}
++
++/**
++ * Child sessions a Code Mode run started or drove, in first-seen order (ocelot): each nested
++ * call whose metadata named a sessionID gets it recorded on its row (core codemode patch).
++ * Titles like "name · task" (octopi workers) split into the card's title and subtitle.
++ */
++function executeChildSessions(metadata: Record<string, unknown>, sessions: SessionSummary[] | undefined) {
++  const calls = Array.isArray(metadata.toolCalls) ? metadata.toolCalls : []
++  const seen = new Map<string, string | undefined>()
++  for (const call of calls) {
++    if (!call || typeof call !== "object") continue
++    const ids = (call as { sessionIDs?: unknown }).sessionIDs
++    if (!Array.isArray(ids)) continue
++    const input = (call as { input?: Record<string, unknown> }).input
++    const name = typeof input?.name === "string" ? input.name : undefined
++    for (const id of ids) if (typeof id === "string" && !seen.has(id)) seen.set(id, name)
++  }
++  return [...seen].map(([id, name]) => {
++    const title = sessions?.find((session) => session.id === id)?.title ?? name ?? id
++    const [head, ...rest] = title.split(" · ")
++    return { id, title: head, subtitle: rest.join(" · ") || undefined }
++  })
++}
++
+ ToolRegistry.register({
+   name: "subagent",
+   render(props) {
+@@ -1574,89 +1696,17 @@ ToolRegistry.register({
+       if (background()) return `${value} (background)`
+       return value
+     })
+-    const running = createMemo(() => {
+-      if (props.status === "streaming" || props.status === "running") return true
+-      const id = childSessionId()
+-      if (!id) return false
+-      return (data.store.session_status[id]?.type ?? "idle") !== "idle"
+-    })
+-
+-    const href = createMemo(() => sessionLink(childSessionId(), data.sessionHref))
+-    const clickable = createMemo(() => !!(childSessionId() && (data.navigateToSession || href())))
+-
+-    const open = () => {
+-      const id = childSessionId()
+-      if (!id) return
+-      data.navigateToSession?.(id)
+-    }
+-
+-    const navigate = (event: MouseEvent) => {
+-      if (!data.navigateToSession) return
+-      if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+-      event.preventDefault()
+-      open()
+-    }
+-    const navigateKey = (event: KeyboardEvent) => {
+-      if (!clickable() || href()) return
+-      if (event.key !== "Enter" && event.key !== " ") return
+-      event.preventDefault()
+-      open()
+-    }
+-
+-    const trigger = () => (
+-      <div
+-        data-component="task-tool-card"
+-        style={{
+-          "--task-agent-color": v2Tone(),
+-          "--task-agent-color-fallback": tone(),
+-        }}
+-      >
+-        <div data-component="task-tool-surface">
+-          <div data-slot="basic-tool-tool-info-structured">
+-            <div data-slot="basic-tool-tool-info-main">
+-              <Show
+-                when={running()}
+-                fallback={
+-                  <span data-component="task-tool-icon">
+-                    <Icon name="subagent" size="small" />
+-                  </span>
+-                }
+-              >
+-                <span data-component="task-tool-spinner" style={{ color: tone() ?? "var(--icon-interactive-base)" }}>
+-                  <SessionProgressIndicatorV2
+-                    style={{ color: v2Tone() ?? "light-dark(var(--v2-text-text-base), #ffffff)" }}
+-                  />
+-                </span>
+-              </Show>
+-              <span data-component="task-tool-title">{title()}</span>
+-              <Show when={subtitle()}>
+-                <span data-slot="basic-tool-tool-subtitle">{subtitle()}</span>
+-              </Show>
+-            </div>
+-            <Show when={clickable()}>
+-              <div data-component="task-tool-action">
+-                <Icon name="chevron-right" size="normal" />
+-              </div>
+-            </Show>
+-          </div>
+-        </div>
+-      </div>
+-    )
+-
+     return (
+       <Show
+         when={delegating()}
+         fallback={
+-          <BasicTool
+-            icon="task"
++          <ChildSessionCard
++            sessionID={childSessionId()}
+             status={props.status}
+-            trigger={trigger()}
+-            hideDetails
+-            triggerAsLink
+-            triggerHref={href()}
+-            clickable={clickable()}
+-            onTriggerClick={navigate}
+-            onTriggerKeyDown={navigateKey}
++            title={title()}
++            subtitle={subtitle()}
++            tone={tone()}
++            v2Tone={v2Tone()}
+           />
+         }
+       >
+@@ -1720,7 +1770,10 @@ ToolRegistry.register({
+     const code = createMemo(() => (typeof props.input.code === "string" ? props.input.code : ""))
+     const output = () => stripAnsi(props.output ?? "").replace(/\r\n?/g, "\n")
+     const sawPending = pending()
++    const data = useData()
++    const children = createMemo(() => executeChildSessions(props.metadata, data.store.session))
+     return (
++      <>
+       <BasicTool
+         {...props}
+         icon="console"
+@@ -1746,6 +1799,16 @@ ToolRegistry.register({
+           <Show when={output()}>{(value) => <span data-slot="bash-result">{value()}</span>}</Show>
+         </ConsoleOutput>
+       </BasicTool>
++      <Show when={children().length > 0}>
++        <div data-slot="execute-child-sessions">
++          <Index each={children()}>
++            {(child) => (
++              <ChildSessionCard sessionID={child().id} title={child().title} subtitle={child().subtitle} literal />
++            )}
++          </Index>
++        </div>
++      </Show>
++      </>
+     )
+   },
+ })
