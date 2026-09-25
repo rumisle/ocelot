@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 25 Sep 2026 13:30:07 +0800
+Subject: session-ui/message: cache hit rate and cost in the turn's meta line
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+After a turn finishes, the line under the reply reads e.g.
+"1m 14s · 95% cache · $0.23": the duration as before, then the share of prompt
+tokens read from the cache and the cost, both summed over every step of the turn.
+Cost is left out when the model has no prices.
+
+Ocelot-Patch: web/turn-stats
+
+diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
+index 73552e6e4..4348e28e8 100644
+--- a/packages/session-ui/src/message/current-message.tsx
++++ b/packages/session-ui/src/message/current-message.tsx
+@@ -43,6 +43,7 @@ export function SessionAssistantContent(props: {
+   contentID: string
+   showAssistantCopyPartID?: string | null
+   turnDurationMs?: number | null
++  turnStats?: { cost: number; cacheHit?: number }
+   defaultOpen?: boolean
+   reasoningDefaultOpen?: boolean
+   toolOpen?: boolean
+@@ -59,6 +60,7 @@ export function SessionAssistantContent(props: {
+             message={props.message}
+             showCopy={props.showAssistantCopyPartID === props.contentID}
+             turnDurationMs={props.turnDurationMs}
++            turnStats={props.turnStats}
+           />
+         )}
+       </Match>
+diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
+index ee7b53c2b..33987d52b 100644
+--- a/packages/session-ui/src/message/message-content.tsx
++++ b/packages/session-ui/src/message/message-content.tsx
+@@ -451,6 +451,7 @@ export function AssistantTextContent(props: {
+   message: SessionMessageAssistant
+   showCopy: boolean
+   turnDurationMs?: number | null
++  turnStats?: { cost: number; cacheHit?: number }
+ }) {
+   const i18n = useI18n()
+   const numfmt = createMemo(() => new Intl.NumberFormat(i18n.locale()))
+@@ -477,8 +478,12 @@ export function AssistantTextContent(props: {
+     })
+   })
+   const meta = createMemo(() => {
++    // ocelot: turn stats, once the turn is done (when the duration shows).
++    const stats = duration() ? props.turnStats : undefined
+     return [
+       duration(),
++      stats?.cacheHit !== undefined ? `${Math.round(stats.cacheHit * 100)}% cache` : "",
++      stats && stats.cost > 0 ? formatCost(stats.cost) : "",
+       interrupted() ? i18n.t("ui.message.interrupted") : "",
+     ]
+       .filter(Boolean)
+@@ -522,6 +527,11 @@ export function AssistantTextContent(props: {
+   )
+ }
+ 
++function formatCost(cost: number) {
++  if (cost < 0.01) return "<$0.01"
++  return `$${cost < 10 ? cost.toFixed(2) : cost.toFixed(1)}`
++}
++
+ export function AssistantReasoningContent(props: {
+   id: string
+   content: SessionMessageAssistantReasoning
+diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
+index ee677260e..2045e07d6 100644
+--- a/packages/session-ui/src/timeline/session-timeline-row.tsx
++++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
+@@ -104,6 +104,21 @@ export function createSessionTimelineRowRenderer(input: {
+     if (completed === undefined || completed < user.time.created) return undefined
+     return completed - user.time.created
+   }
++  // ocelot: cost and cache hit rate, summed over every step of the turn.
++  const stats = (messageID: string) => {
++    const messages = input.projection.assistantMessagesByParent().get(messageID) ?? emptyAssistantMessages
++    let cost = 0
++    let prompt = 0
++    let cached = 0
++    for (const message of messages) {
++      const tokens = message.tokens
++      cost += message.cost ?? 0
++      if (!tokens) continue
++      prompt += tokens.input + tokens.cache.read + tokens.cache.write
++      cached += tokens.cache.read
++    }
++    return { cost, cacheHit: prompt > 0 ? cached / prompt : undefined }
++  }
+   const copyContentID = (messageID: string) => {
+     if (workingTurn(messageID)) return null
+     const message = input.projection
+@@ -276,6 +291,7 @@ export function createSessionTimelineRowRenderer(input: {
+                 contentID={ref()!.partID}
+                 showAssistantCopyPartID={copyContentID(row().userMessageID)}
+                 turnDurationMs={duration(row().userMessageID)}
++                turnStats={stats(row().userMessageID)}
+                 defaultOpen={defaultOpen()}
+                 toolOpen={input.disclosure.value(disclosureKey()) ?? defaultOpen()}
+                 onToolOpenChange={(open) => input.disclosure.set(disclosureKey(), open)}

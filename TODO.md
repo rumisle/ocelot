@@ -38,6 +38,11 @@ Open:
 - [x] opencode-octopi finds `service-*.json` by pid.
 - [ ] Try the installer on the Mac (curl download, so no quarantine).
 
+## Testing
+
+- Never test against real models. Use a fake provider (like opencode-octopi's
+  `test/fake-anthropic.ts`) and a throwaway server with its own XDG dirs.
+
 ## 1. Plugin API (server)
 
 The server already does these for its HTTP routes; the plugin API doesn't expose them.
@@ -63,8 +68,12 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 - [ ] Working timer (port of pi working-timer). Needs a UI design first.
 - [x] Message meta: user messages lose "Build · model · time"; assistant keeps only the duration.
       Patch `web/message-meta`. (User revert/copy buttons stay in their row.)
-- [ ] Per-turn stats in the assistant meta line, next to the duration. To discuss; pi's
-      turn-stats shows `◷ 2m 04s 23:47 │ ttft 480ms tps 42.1 │ ↓4210 (3940 cached) ↑318 │ cache 94% │ $0.21`.
+- [x] Turn stats: `1m 14s · 95% cache · $0.23` under the reply (summed over the turn's steps).
+      Patch `web/turn-stats`.
+- [ ] TTFT and tokens/s in the turn stats. Not stored: `time.streamed` marks the *end* of the
+      provider response, not the first token. Needs a small core patch: record the first-output
+      time in the step publisher (`publish-llm-event.ts`, where `outputStarted` flips), carry it on
+      `session.step.streamed` or a new field, keep it on the message, show `ttft 480ms · 42 tok/s`.
 
 ### Composer
 - [x] One-row composer `[+] [editor] [send]`, grows as you type; Model / Effort / Agent in the + menu.
@@ -72,6 +81,13 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 
 ### Mobile
 - [ ] (later) Top bar → two floating buttons; it wastes a lot of vertical space.
+
+### Plugin UI in the web app
+- [ ] General way for plugins to add UI to the web app (upstream only has TUI plugin slots).
+      First users: cache-warmer status/tips like pi's (cache expiry countdown, warm now),
+      octopi's fleet.
+- [ ] Custom renderers for tool calls, so e.g. `tools.octopi.*` calls in Code Mode render as
+      worker cards (name, model, status, result) instead of raw code + JSON.
 
 ### General
 - [ ] The web UI has many small bugs; collect them here as we hit them.
