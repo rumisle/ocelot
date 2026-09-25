@@ -9,8 +9,28 @@ small and out of fast-moving core; upstream what we can so it leaves the set.
 
 ## 0. Infra first
 
-- [ ] Vendor repo: upstream tag as base, `patches/NNNN-*.patch` applied in order.
-- [ ] Rebase script: bump base tag, re-apply, report conflicts.
+Modelled on Helium (imputnet/helium + helium-linux), adapted to a git upstream.
+
+- [ ] Layout: `upstream.txt` (pinned opencode tag), `revision.txt`,
+      `patches/series` (order) + `patches/<area>/<name>.patch`
+      (areas e.g. `plugin-api/`, `web/`, `tui/`, `upstream-fixes/`).
+      One feature per patch; patch header says what and why.
+- [ ] Apply: clone upstream at the tag, apply `series` in order with
+      `git apply --3way` (Helium uses quilt with no fuzz because Chromium ships as a
+      tarball; we have git, so we get 3-way merges on conflicts).
+- [ ] Edit loop: apply series as one commit per patch on a work branch, edit with
+      normal git (rebase -i, fixup), re-export to `patches/` with a script.
+- [ ] Bump script (Helium's `bump-platform`): move to a new tag, re-apply, refresh
+      every patch, reset revision to 1, open a PR. Stop and report on conflicts.
+- [ ] Versioning: `<upstream>-<revision>`, e.g. `2.0.16-1`. Revision resets to 1 on
+      a base bump and increments for patch-only releases. Release automatically
+      when the version changes on main, with `git log` since the last tag as changelog.
+- [ ] Own channel: build with our own OPENCODE_CHANNEL so the service registration
+      (`service-<channel>.json`) and default port don't collide with stock opencode.
+      Check what else keys off the channel (updates, TUI channel, plugin cache).
+- [ ] CI: validate that all patches apply cleanly to the pinned tag on every push.
+- [ ] Commit style: scope first, e.g. `web/timeline: show tool duration`.
+- [ ] Credit where a patch came from (upstream PR number) so it can be dropped once merged.
 - [ ] Build: bun 1.4.2 (repo's pin; we have 1.3.11), `--single` for linux-x64.
       Measure build time and binary size (stock is 194 MB).
 - [ ] Install/swap: replace `@opencode/cli` binary or ship our own package;
