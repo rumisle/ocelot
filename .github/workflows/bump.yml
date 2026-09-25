@@ -1,0 +1,30 @@
+name: bump
+# Moves to a new upstream tag and opens a PR. Fails if a patch no longer applies:
+# then run scripts/bump.sh locally and resolve the conflict.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream tag (default latest v2 release)
+        required: false
+  schedule:
+    - cron: "0 6 * * 1" # Mondays
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global user.name ocelot-ci && git config --global user.email ocelot-ci@users.noreply.github.com
+      - run: scripts/bump.sh ${{ inputs.tag }}
+      - run: |
+          tag=$(tr -d '[:space:]' < upstream.txt)
+          if git diff --quiet; then echo "nothing to bump"; exit 0; fi
+          git switch -c "bump/$tag"
+          git commit -qam "upstream: bump to $tag"
+          git push -f origin "bump/$tag"
+          gh pr create --title "upstream: bump to $tag" --body "Patches re-applied cleanly on $tag." || true

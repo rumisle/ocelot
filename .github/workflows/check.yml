@@ -1,0 +1,13 @@
+name: check
+# Every patch applies cleanly to the pinned tag, and patches/ is exactly what export.sh writes.
+on:
+  push:
+  pull_request:
+jobs:
+  patches:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global user.name ocelot-ci && git config --global user.email ocelot-ci@users.noreply.github.com
+      - run: scripts/apply.sh
+      - run: scripts/export.sh && git diff --exit-code -- patches

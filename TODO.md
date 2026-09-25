@@ -1,42 +1,46 @@
-# opencode fork — TODO
+# ocelot — TODO
 
-Vendored OpenCode v2 with a patch set (Helium-style), built with
-`packages/cli/script/build.ts --single` and published as our own binary.
+OpenCode v2 with our fixes as a patch set (Helium-style). See README.md for the workflow.
 
 Upstream releases almost daily (2.0.0 → 2.0.16 in 13 days, often 40–60 commits,
 hundreds of files each). Pin a version, rebase every week or two. Keep patches
 small and out of fast-moving core; upstream what we can so it leaves the set.
 
-## 0. Infra first
+## 0. Infra
 
-Modelled on Helium (imputnet/helium + helium-linux), adapted to a git upstream.
+Modelled on Helium (imputnet/helium + helium-linux), adapted to a git upstream:
+patches are `git format-patch` files applied with `git am --3way`, so a bump gets
+real merge conflicts instead of Helium's quilt no-fuzz failures.
 
-- [ ] Layout: `upstream.txt` (pinned opencode tag), `revision.txt`,
-      `patches/series` (order) + `patches/<area>/<name>.patch`
-      (areas e.g. `plugin-api/`, `web/`, `tui/`, `upstream-fixes/`).
-      One feature per patch; patch header says what and why.
-- [ ] Apply: clone upstream at the tag, apply `series` in order with
-      `git apply --3way` (Helium uses quilt with no fuzz because Chromium ships as a
-      tarball; we have git, so we get 3-way merges on conflicts).
-- [ ] Edit loop: apply series as one commit per patch on a work branch, edit with
-      normal git (rebase -i, fixup), re-export to `patches/` with a script.
-- [ ] Bump script (Helium's `bump-platform`): move to a new tag, re-apply, refresh
-      every patch, reset revision to 1, open a PR. Stop and report on conflicts.
-- [ ] Versioning: `<upstream>-<revision>`, e.g. `2.0.16-1`. Revision resets to 1 on
-      a base bump and increments for patch-only releases. Release automatically
-      when the version changes on main, with `git log` since the last tag as changelog.
-- [ ] Own channel: build with our own OPENCODE_CHANNEL so the service registration
-      (`service-<channel>.json`) and default port don't collide with stock opencode.
-      Check what else keys off the channel (updates, TUI channel, plugin cache).
-- [ ] CI: validate that all patches apply cleanly to the pinned tag on every push.
-- [ ] Commit style: scope first, e.g. `web/timeline: show tool duration`.
-- [ ] Credit where a patch came from (upstream PR number) so it can be dropped once merged.
-- [ ] Build: bun 1.4.2 (repo's pin; we have 1.3.11), `--single` for linux-x64.
-      Measure build time and binary size (stock is 194 MB).
-- [ ] Install/swap: replace `@opencode/cli` binary or ship our own package;
-      restart service. Config and plugins unchanged.
-- [ ] Publish: GitHub release with binary (and CI to build on base bump).
-- [ ] Smoke test: service starts, plugins load, web UI serves, octopi e2e passes.
+Done:
+- [x] Layout: `upstream.txt`, `revision.txt`, `patches/series` + `patches/<area>/<name>.patch`.
+- [x] `scripts/apply.sh` / `export.sh`: build/src = tag + one commit per patch
+      (`Ocelot-Patch:` trailer names the file); edit with git, export back.
+- [x] `scripts/bump.sh [tag]`: pin, reset revision, re-apply, re-export.
+- [x] `scripts/build.sh [targets]`: bun 1.4.2 (upstream's pin, auto-downloaded),
+      linux-x64 + darwin-arm64 cross-compiled on Linux in ~45 s total, 194 / 172 MB.
+      The Mac binary carries bun's ad-hoc code signature.
+- [x] `scripts/install.sh`: ~/.local/bin/ocelot, restarts the service if running.
+- [x] Own channel `ocelot`: own service file, port (46624) and database
+      (`opencode-ocelot.db`); config, plugins and auth shared with stock.
+- [x] Patch `ocelot/no-upstream-updates`: the updater would otherwise replace us
+      with stock OpenCode.
+- [x] Smoke test: service starts, all four plugins load, a prompt round-trips.
+- [x] CI: `check` (patches apply + export is a no-op), `release` (build + GitHub
+      release when the version is new), `bump` (weekly/manual, opens a PR).
+
+Open:
+- [ ] Check CI actually runs green (first push).
+- [ ] `bump` PRs need "Allow GitHub Actions to create pull requests" in repo settings.
+      PRs opened with GITHUB_TOKEN don't trigger `check`; the bump job applies patches itself.
+- [ ] Switch over from stock: move sessions? `opencode-ocelot.db` starts empty. Options:
+      copy `opencode.db` once while both services are stopped, or build with
+      `OPENCODE_DISABLE_CHANNEL_DB` semantics (shared DB; risky once patches touch the schema).
+- [ ] Service hostname for ocelot (`ocelot service set hostname 100.78.68.89`), web UI pairing.
+- [ ] opencode-octopi reads `service.json` only; make it find `service-*.json` by pid.
+      (Goes away with the plugin-API patches.)
+- [ ] Branding: `--version` says "opencode v2.0.16-1"; web UI title, TUI name.
+- [ ] Install from a release on the Mac (curl + tar; no quarantine that way).
 
 ## 1. Plugin API (server)
 
