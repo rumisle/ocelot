@@ -18,3 +18,4 @@ tui/session-notices.patch
 core/message-branches.patch
 web/message-branches.patch
 tui/message-branches.patch
+core/refusal-reason.patch
