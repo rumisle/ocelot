@@ -13,7 +13,7 @@ every release, so it installs with:
 Ocelot-Patch: ocelot/installer
 
 diff --git a/install b/install
-index b17ccfde3..96025499d 100755
+index b17ccfde3..23e249727 100755
 --- a/install
 +++ b/install
 @@ -1,7 +1,8 @@
@@ -75,7 +75,7 @@ index b17ccfde3..96025499d 100755
          exit 1
          ;;
      esac
-@@ -166,42 +167,32 @@ else
+@@ -166,42 +167,38 @@ else
          exit 1
      fi
  
@@ -86,9 +86,16 @@ index b17ccfde3..96025499d 100755
 -        package=$(echo "$metadata" | sed -n 's/.*"package":"\([^"]*\)".*/\1/p')
 -
 -        if [ -z "$specific_version" ] || [ -z "$package" ]; then
-+        specific_version=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' || true)
+-            echo -e "${RED}Failed to fetch version information${NC}"
++        # releases/latest redirects to the latest tag: no API rate limit, and it works where
++        # api.github.com is blocked. The API is only the fallback.
++        specific_version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null | sed -n 's#.*/releases/tag/v\([^/?]*\)$#\1#p' || true)
 +        if [ -z "$specific_version" ]; then
-             echo -e "${RED}Failed to fetch version information${NC}"
++            specific_version=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' || true)
++        fi
++        if [ -z "$specific_version" ]; then
++            echo -e "${RED}Failed to fetch version information from github.com${NC}"
++            echo "Check that github.com is reachable, or pass a version: bash -s -- --version 2.0.16-7"
              exit 1
          fi
 -        package_scope="${package%/cli}"
@@ -127,7 +134,7 @@ index b17ccfde3..96025499d 100755
      binary_name="$SOURCE_APP"
      if [ "$os" = "windows" ]; then
          binary_name="$SOURCE_APP.exe"
-@@ -340,7 +331,7 @@ download_and_install() {
+@@ -340,7 +337,7 @@ download_and_install() {
      if [ "$os" = "windows" ]; then
          installed_binary="$APP.exe"
      fi
@@ -136,7 +143,7 @@ index b17ccfde3..96025499d 100755
      chmod 755 "$INSTALL_DIR/$installed_binary"
      rm -rf "$tmp_dir"
  }
-@@ -384,7 +375,6 @@ else
+@@ -384,7 +381,6 @@ else
      check_version
      download_and_install
  fi
@@ -144,7 +151,7 @@ index b17ccfde3..96025499d 100755
  
  
  add_to_path() {
-@@ -394,9 +384,9 @@ add_to_path() {
+@@ -394,9 +390,9 @@ add_to_path() {
      if grep -Fxq "$command" "$config_file"; then
          print_message info "Command already exists in $config_file, skipping write."
      elif [[ -w $config_file ]]; then
@@ -156,7 +163,7 @@ index b17ccfde3..96025499d 100755
      else
          print_message warning "Manually add the directory to $config_file (or similar):"
          print_message info "  $command"
-@@ -472,17 +462,10 @@ if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
+@@ -472,17 +468,10 @@ if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
  fi
  
  echo -e ""
