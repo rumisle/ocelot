@@ -124,3 +124,50 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 - [ ] TUI: switch branches from the message actions (list the alternatives, pick one).
       Today the TUI follows switches made in the web app but can't make them.
 - [ ] Forking stays upstream's `/fork` (web and TUI); no button.
+
+## 5. Backlog from 2026-09-27 (researched, not started)
+
+1. **Scrollback.**
+   - [ ] Returning to the app (iOS app switch, any reconnect) loses your place. Likely cause:
+         on reconnect `session-resolution.ts` re-runs `message.sync`, which replaces the
+         transcript with only the latest 20 messages (`reconcile`), dropping every older page
+         you had loaded. Fix: on resync, merge the fetched page into what is loaded (or refetch
+         down to the oldest loaded message) instead of replacing it; keep the scroll anchor.
+   - [ ] Loading older pages jumps back and forth (flicker). Needs a recording/repro; check the
+         virtualizer's scroll anchoring when rows are prepended (`timeline/virtualizer.tsx`).
+   - [ ] Orientation while scrolling back: e.g. a sticky "which turn am I in" header or
+         scrubber with turn positions.
+2. **Edit/branches polish.**
+   - [ ] The ‹ n/m › switcher should fade with the other hover buttons, not stay visible.
+   - [ ] "Message not found" after a model switch + edit. Not in the server log (client-side?).
+         Suspect: a model switch while an edit is staged adds a marker message after the
+         boundary. Needs a repro.
+   - [ ] Edit feels slow: the web path interrupts, stages, then lists and cancels the inbox
+         serially. Measure; make the UI optimistic.
+3. **Compaction** that works automatically end to end. opencode-vcc is not enough. Decide
+   what "works" means first (when it triggers, what survives, whether the cache is reused).
+4. **Background shell** considered harmful. Collect the complaints first.
+5. **Cache warming for Claude on other providers.** The warmer hooks only providers with
+   known lifetimes (default `anthropic`) and only warms `/v1/messages` URLs. Detect by
+   request format (Anthropic Messages body; Vertex `:streamRawPredict`, gateways/proxies)
+   rather than provider ID. Which provider(s)? (opencode-cache-warmer repo)
+6. **GPT adapter of the internal LLM proxy.** Which proxy, and what is broken?
+7. **Tool time elapsed.** Tool parts already record `time.created/ran/completed`: show the
+   duration (live while running) in the tool row. Shell rows have created/completed too.
+8. **Mobile header.** Always visible: model, effort, context % (bar) and cost; Changes /
+   Files / Terminal move into the menu. Needs a design pass (sketch first).
+9. **Pi-style rewind to any step.** Each model step is its own assistant message, and
+   `_ocelot_branch` can park from any message, so "rewind here" on a step (e.g. before a tool
+   result that trips a classifier) + a steering message is a UI + small core change: allow the
+   revert boundary and the branch switcher on assistant steps, not only user messages.
+   Not possible inside one step (parallel tool calls in one response).
+10. **Shortcuts and settings.**
+   - [ ] Defaults collide with the browser: mod+w, mod+t/mod+n, mod+shift+t (browser-reserved,
+         never reach the page), mod+p, mod+f, mod+o, mod+u, mod+[ / mod+], mod+shift+r, f5,
+         ctrl+l. Give the web app its own defaults (e.g. alt- or a leader key), keep the
+         desktop ones for the desktop app.
+   - [ ] Settings (shortcuts, auto-accept, ...) live in browser localStorage per device.
+         Sync them through the server (core has a KV table; add an endpoint + a persistence
+         adapter for the chosen namespaces).
+11. [ ] Config watching fails: `~/.config/opencode` is a symlink (to agent-config) and the
+      watcher errors "inotify_add_watch ... Not a directory", so config edits may not reload.
