@@ -146,7 +146,39 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          serially. Measure; make the UI optimistic.
 3. **Compaction** that works automatically end to end. opencode-vcc is not enough. Decide
    what "works" means first (when it triggers, what survives, whether the cache is reused).
-4. **Background shell** considered harmful. Collect the complaints first.
+4. **Background shell considered harmful.** How it works today (`tool/plugin/shell.ts`,
+   `job.ts`): `shell {background: true}` returns at once; on completion the output is posted
+   as a *synthetic* inbox item with delivery `steer`, which reaches the model as a **user-role
+   message** (`to-llm-message.ts`) at the next turn boundary, and wakes an idle session.
+   Foreground commands block for up to 2 min (default timeout); background ones have no
+   timeout. The agent has no tool to list, inspect, wait for or kill jobs: it only gets the
+   output file path and "you will be notified, DO NOT poll".
+   The complaints, all confirmed by the code:
+   - [ ] Arrives at arbitrary points: a steer lands at whatever turn boundary comes next,
+         mid-way through unrelated work.
+   - [ ] Same weight as the user: it is a user-role message, so the model feels it must answer
+         it right away, in the middle of what it was doing.
+   - [ ] Forgotten / invisible: no job list/status tool, no reminder; a job that hangs never
+         reports (no timeout) and the agent can't tell.
+   - [ ] Doesn't solve blocking: a foreground command still blocks the agent (up to the
+         timeout) unless a human clicks "run in background".
+   - [ ] Cache: the agent ends its turn to wait, the completion wakes it minutes later on a cold
+         cache (full re-bill) unless warming covers it.
+   Direction (to design properly; pi has no background shell; octopi's model is closer):
+   - Yield instead of background: every shell call runs normally; if it hasn't finished
+     within a yield window (~10-30 s, like Codex's exec yield), the tool returns "still
+     running as job N, output so far: ..." and the command keeps going. No background flag,
+     no human click, no blocked agent.
+   - Job status as ambient context, not messages: no synthetic user message. Changes in job
+     state ride along as a short footer on the next tool result ("jobs: #3 cargo build done,
+     exit 0, 4m12s · #4 dev server running 12m, last output 3m ago"), so it arrives as tool
+     output, at a natural point, below the user's weight, and only in new content (cache-safe).
+   - A `job` tool: list, output (tail / since cursor), wait (with timeout: the agent stays in
+     its turn, no cold cache), kill. Waits report "no output for N min" so hangs are visible.
+   - Idle: finishing a job does not wake an idle agent by default; the UI shows running and
+     finished jobs; the agent sees them in its next turn. If it needs the result it waits.
+   - Plugin or core patch? The shell tool is core; a plugin could replace the tool
+     (`shell` override) and keep the job table itself. Decide after a design pass.
 5. **Cache warming for Claude on other providers.** The warmer hooks only providers with
    known lifetimes (default `anthropic`) and only warms `/v1/messages` URLs. Detect by
    request format (Anthropic Messages body; Vertex `:streamRawPredict`, gateways/proxies)
