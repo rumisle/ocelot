@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sun, 27 Sep 2026 12:09:21 +0800
+Subject: app/session: the page title is the session's title
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The browser tab said "OpenCode" everywhere. A session page now sets it to
+"<session title> · OpenCode", follows renames (including the automatic title), and goes
+back to "OpenCode" when you leave the session.
+
+Ocelot-Patch: web/page-title
+
+diff --git a/packages/app/src/session/screen.tsx b/packages/app/src/session/screen.tsx
+index 71fe3a9a2..03194d35b 100644
+--- a/packages/app/src/session/screen.tsx
++++ b/packages/app/src/session/screen.tsx
+@@ -9,6 +9,7 @@ import {
+   createEffect,
+   createComputed,
+   on,
++  onCleanup,
+ } from "solid-js"
+ import { createStore } from "solid-js/store"
+ import { ResizeHandle } from "@opencode/ui/resize-handle"
+@@ -37,6 +38,7 @@ import { createSessionBrowser } from "./browser/model"
+ import { createTimelineCache } from "./timeline/cache"
+ import { ArtifactMarkdownProvider, ArtifactOpenerProvider } from "./files/open-artifact"
+ import { createSessionBtw } from "./btw/model"
++import { sessionTitle } from "./title"
+ 
+ const SessionMobileFiles = lazy(async () => {
+   const { SessionMobileFiles } = await import("./files/session-mobile-files")
+@@ -64,6 +66,14 @@ function SessionScreenContent(props: { session: SessionModel; browser: ReturnTyp
+   const session = props.session
+   const browser = props.browser
+   const server = useServer()
++  // ocelot: the page (browser tab) title is the session's title.
++  createEffect(() => {
++    const title = sessionTitle(session.data.info()?.title)
++    document.title = title ? `${title} · OpenCode` : "OpenCode"
++  })
++  onCleanup(() => {
++    document.title = "OpenCode"
++  })
+   const detailsProject = createMemo(() => {
+     const info = session.data.info()
+     return info ? projectForSession(info, server.ctx.sync.data.project) : undefined

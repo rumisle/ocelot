@@ -19,3 +19,4 @@ core/message-branches.patch
 web/message-branches.patch
 tui/message-branches.patch
 core/refusal-reason.patch
+web/page-title.patch
