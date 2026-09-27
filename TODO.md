@@ -164,21 +164,18 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          timeout) unless a human clicks "run in background".
    - [ ] Cache: the agent ends its turn to wait, the completion wakes it minutes later on a cold
          cache (full re-bill) unless warming covers it.
-   Direction (to design properly; pi has no background shell; octopi's model is closer):
-   - Yield instead of background: every shell call runs normally; if it hasn't finished
-     within a yield window (~10-30 s, like Codex's exec yield), the tool returns "still
-     running as job N, output so far: ..." and the command keeps going. No background flag,
-     no human click, no blocked agent.
-   - Job status as ambient context, not messages: no synthetic user message. Changes in job
-     state ride along as a short footer on the next tool result ("jobs: #3 cargo build done,
-     exit 0, 4m12s · #4 dev server running 12m, last output 3m ago"), so it arrives as tool
-     output, at a natural point, below the user's weight, and only in new content (cache-safe).
-   - A `job` tool: list, output (tail / since cursor), wait (with timeout: the agent stays in
-     its turn, no cold cache), kill. Waits report "no output for N min" so hangs are visible.
-   - Idle: finishing a job does not wake an idle agent by default; the UI shows running and
-     finished jobs; the agent sees them in its next turn. If it needs the result it waits.
-   - Plugin or core patch? The shell tool is core; a plugin could replace the tool
-     (`shell` override) and keep the job table itself. Decide after a design pass.
+   Decision (2026-09-27): the agent manages long work itself with the tmux recipe in
+   AGENTS.md (log + `tmux wait-for`, short wait then guarded long wait). It already avoids all
+   five problems; the user is making the recipe less verbose for weaker models. OpenCode
+   doesn't need to know about the jobs.
+   - [ ] Step 1: remove the `background` option and its "you will be notified, DO NOT poll"
+         instructions from the shell tool, so no synthetic user-role notifications exist.
+   - [ ] Step 2 (the one gap tmux leaves): a yield window. A command the agent didn't expect
+         to be slow shouldn't block it: past ~10-30 s the shell tool hands the still-running
+         command over to a tmux session and returns "still running in tmux session X, log L,
+         wait with ..." plus the output so far, i.e. the same state the recipe would have
+         produced. Needs the process to be started inside tmux from the beginning (or a
+         wrapper), since a running child can't be moved into tmux afterwards.
 5. **Cache warming for Claude on other providers.** The warmer hooks only providers with
    known lifetimes (default `anthropic`) and only warms `/v1/messages` URLs. Detect by
    request format (Anthropic Messages body; Vertex `:streamRawPredict`, gateways/proxies)
