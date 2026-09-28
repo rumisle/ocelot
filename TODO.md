@@ -37,6 +37,17 @@ Open:
 - [x] ocelot service on Tailscale: 100.78.68.89:46624.
 - [x] opencode-octopi finds `service-*.json` by pid.
 - [ ] Try the installer on the Mac (curl download, so no quarantine).
+- [x] Restart when idle: patch `cli/restart-when-idle`. `ocelot service set restart idle|immediate`
+      (default `immediate` = upstream). With `idle`, a new binary at the server's path and a newer
+      TUI meeting a busy server restart it once no session has run for 30 s; `service restart
+      --when-idle` asks for it regardless; `service status` shows it. `scripts/install.sh` follows
+      the setting (`--now` / `--when-idle`).
+  - [ ] Web app banner: "update installed, restarts when idle · Restart now", and reload into the
+        new UI after the restart when the composer is empty.
+  - [ ] A session waiting on a permission/question counts as running, so it holds the restart back
+        until answered. Decide whether that should count as idle (check that resume restores the prompt).
+  - [ ] The restarted server inherits the waiter's environment (the old server's, or the shell that
+        ran install.sh), not a fresh login shell as the systemd unit gives.
 
 ## Testing
 

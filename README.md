@@ -76,6 +76,19 @@ Updates come from this repo's releases, never from upstream OpenCode. As in Open
 the `autoupdate` config option decides what happens when a new release is out:
 `"notify"` (the default) tells you, `true` installs it, `false` does nothing.
 
+By default the background server restarts into a new version as in OpenCode: the next time a
+newer `ocelot` connects to it, even mid-turn (the turn resumes after the restart). To have it
+wait until no session has run for 30 seconds instead:
+
+```bash
+ocelot service set restart idle        # back to the default: ocelot service set restart immediate
+```
+
+Then an installed update restarts the server by itself once idle, and a newer TUI connects to a
+busy server instead of replacing it. `ocelot service status` shows a pending restart.
+`ocelot service restart --when-idle` asks for one regardless of the setting; plain
+`ocelot service restart` restarts now.
+
 ## Versions
 
 Versions are `<upstream version>-<revision>`: `2.0.16-1` is the first ocelot release on

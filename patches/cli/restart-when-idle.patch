@@ -1,0 +1,360 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Mon, 28 Sep 2026 20:45:16 +0800
+Subject: cli/service: restart the background server when idle
+
+`ocelot service set restart idle` (default `immediate`, upstream's behavior) makes the automatic
+restarts wait until no session has run for 30 s:
+
+- A new binary installed at the server's own path (install script, `ocelot upgrade`,
+  autoupdate) restarts the server once idle; with `immediate` nothing happens, as upstream.
+- A client of another version (TUI) no longer replaces a busy server: it connects to it and the
+  server restarts into the new version once idle. Idle servers are replaced right away.
+
+`ocelot service restart --when-idle` asks for the same regardless of the setting; plain
+`ocelot service restart` still restarts at once. A detached waiter (`--idle-waiter`) polls
+/api/session/active and replaces the server like a newer client does (terminals handed over);
+its progress is `<registration>.restart`, shown by `ocelot service status`.
+
+Ocelot-Patch: cli/restart-when-idle
+
+diff --git a/packages/cli/src/commands/commands.ts b/packages/cli/src/commands/commands.ts
+index 682953ae9..435d521d4 100644
+--- a/packages/cli/src/commands/commands.ts
++++ b/packages/cli/src/commands/commands.ts
+@@ -450,7 +450,16 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
+       description: "Manage the background server",
+       commands: [
+         Spec.make("start", { description: "Start the background server" }),
+-        Spec.make("restart", { description: "Restart the background server" }),
++        Spec.make("restart", {
++          description: "Restart the background server",
++          params: {
++            whenIdle: Flag.boolean("when-idle").pipe(
++              Flag.withDescription("Restart once no session has run for 30 seconds, keeping terminals"),
++              Flag.withDefault(false),
++            ),
++            idleWaiter: Flag.boolean("idle-waiter").pipe(Flag.withDefault(false), Flag.withHidden),
++          },
++        }),
+         Spec.make("status", { description: "Show background server status" }),
+         Spec.make("stop", { description: "Stop the background server" }),
+         Spec.make("get", {
+diff --git a/packages/cli/src/commands/handlers/service/restart.ts b/packages/cli/src/commands/handlers/service/restart.ts
+index afc7bb457..127c154fb 100644
+--- a/packages/cli/src/commands/handlers/service/restart.ts
++++ b/packages/cli/src/commands/handlers/service/restart.ts
+@@ -3,13 +3,19 @@ import { Effect } from "effect"
+ import { Service } from "@opencode/client/effect/service"
+ import { Commands } from "../../commands"
+ import { Runtime } from "../../../framework/runtime"
++import { IdleRestart } from "../../../services/idle-restart"
+ import { ServiceConfig } from "../../../services/service-config"
+ import { ServerConnection } from "../../../services/server-connection"
+ 
+ export default Runtime.handler(
+   Commands.commands.service.commands.restart,
+-  Effect.fn("cli.service.restart")(function* () {
++  Effect.fn("cli.service.restart")(function* (input) {
+     const options = yield* ServiceConfig.options()
++    if (input.idleWaiter) return yield* IdleRestart.wait(options)
++    if (input.whenIdle && (yield* IdleRestart.request(options.file))) {
++      process.stdout.write(`restarting once no session has run for ${IdleRestart.QUIET / 1000}s` + EOL)
++      return
++    }
+     // Keep this explicit: automatic service replacement must preserve terminals.
+     yield* ServerConnection.shutdownPersistentPty(options).pipe(Effect.ignore)
+     yield* Service.stop(options)
+diff --git a/packages/cli/src/commands/handlers/service/status.ts b/packages/cli/src/commands/handlers/service/status.ts
+index ade0a3919..5ee14b8c7 100644
+--- a/packages/cli/src/commands/handlers/service/status.ts
++++ b/packages/cli/src/commands/handlers/service/status.ts
+@@ -3,6 +3,7 @@ import { Effect } from "effect"
+ import { Service } from "@opencode/client/effect/service"
+ import { Commands } from "../../commands"
+ import { Runtime } from "../../../framework/runtime"
++import { IdleRestart } from "../../../services/idle-restart"
+ import { ServiceConfig } from "../../../services/service-config"
+ 
+ export default Runtime.handler(
+@@ -11,5 +12,13 @@ export default Runtime.handler(
+     const options = yield* ServiceConfig.options()
+     const found = yield* Service.discover({ ...options, version: undefined })
+     process.stdout.write((found?.url ?? "stopped") + EOL)
++    const pending = found === undefined ? undefined : yield* IdleRestart.status(options.file)
++    if (pending === undefined) return
++    process.stdout.write(
++      (pending.idleSince === undefined
++        ? `restart pending: waiting on ${pending.running.length} running session${pending.running.length === 1 ? "" : "s"}`
++        : `restart pending: idle for ${Math.round((Date.now() - pending.idleSince) / 1000)}s of ${IdleRestart.QUIET / 1000}s`) +
++        EOL,
++    )
+   }),
+ )
+diff --git a/packages/cli/src/server-process.ts b/packages/cli/src/server-process.ts
+index cce3a2c53..7712161d8 100644
+--- a/packages/cli/src/server-process.ts
++++ b/packages/cli/src/server-process.ts
+@@ -15,6 +15,7 @@ import { ServiceConfig } from "./services/service-config"
+ import { RetainedImage } from "./services/retained-image"
+ import { ServiceRegistration } from "./services/service-registration"
+ import { WebUi } from "./services/web-ui"
++import { IdleRestart } from "./services/idle-restart"
+ import { databasePath } from "./database-path"
+ 
+ export type Mode = "default" | "service" | "stdio"
+@@ -162,6 +163,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
+       const url = HttpServer.formatAddress(server.address)
+       console.log(options.mode === "stdio" ? JSON.stringify({ url }) : `server listening on ${url}`)
+       if (foreground && !environmentPassword) console.log(`server password ${password}`)
++      if (serviceOptions !== undefined) yield* IdleRestart.watch(serviceOptions.file)
+       return yield* options.mode === "service"
+         ? server.shutdown
+         : options.mode === "stdio"
+diff --git a/packages/cli/src/services/idle-restart.ts b/packages/cli/src/services/idle-restart.ts
+new file mode 100644
+index 000000000..1f487e230
+--- /dev/null
++++ b/packages/cli/src/services/idle-restart.ts
+@@ -0,0 +1,145 @@
++export * as IdleRestart from "./idle-restart"
++
++import { Service, type EnsureOptions } from "@opencode/client/effect/service"
++import { OpenCode } from "@opencode/client/promise"
++import { spawn } from "node:child_process"
++import { Effect, FileSystem, Option, Schedule, Schema } from "effect"
++import { selfCommand } from "../util/process"
++import { ServiceConfig } from "./service-config"
++
++// ocelot: restart the managed server once it is idle instead of in the middle of a turn.
++// A detached waiter (`service restart --idle-waiter`, spawned by `request`) polls the server's
++// running sessions and, after QUIET without any, replaces it the way a newer client does:
++// persistent terminals are handed over, and the new server is started from the binary on disk.
++// Its progress is `<registration>.restart`, which `service status` shows.
++
++export const QUIET = 30_000
++
++const Status = Schema.Struct({
++  waiter: Schema.Int,
++  server: Schema.Int,
++  running: Schema.Array(Schema.String),
++  idleSince: Schema.optional(Schema.Number),
++})
++type Status = typeof Status.Type
++
++const decodeStatus = Schema.decodeUnknownOption(Schema.fromJsonString(Status))
++const decodeRegistration = Schema.decodeUnknownOption(Schema.fromJsonString(Service.Info))
++
++/** Starts a waiter for the running server unless one is already waiting. Returns false when no server is running. */
++export const request = Effect.fnUntraced(function* (file: string) {
++  const server = yield* registration(file)
++  if (server === undefined) return false
++  if ((yield* status(file)) !== undefined) return true
++  const [command, ...args] = selfCommand()
++  spawn(command!, [...args, "service", "restart", "--idle-waiter"], { detached: true, stdio: "ignore" }).unref()
++  return true
++})
++
++/** The pending restart of the running server, if a waiter is alive. */
++export const status = Effect.fnUntraced(function* (file: string) {
++  const fs = yield* FileSystem.FileSystem
++  const found = Option.getOrUndefined(
++    decodeStatus(yield* fs.readFileString(file + ".restart").pipe(Effect.orElseSucceed(() => ""))),
++  )
++  if (found === undefined || !alive(found.waiter)) return undefined
++  if ((yield* registration(file))?.pid !== found.server) return undefined
++  return found
++})
++
++/** The waiter: runs until the server is replaced, by this waiter or anyone else. */
++export const wait = Effect.fnUntraced(function* (options: EnsureOptions & { readonly file: string }) {
++  const fs = yield* FileSystem.FileSystem
++  const statusFile = options.file + ".restart"
++  const server = yield* registration(options.file)
++  if (server === undefined) return
++  if ((yield* status(options.file)) !== undefined) return
++  const client = OpenCode.make({
++    baseUrl: server.url,
++    headers: Service.headers({
++      url: server.url,
++      auth: server.password === undefined ? undefined : { type: "basic", username: "opencode", password: server.password },
++    }),
++  })
++  const write = (value: Status) => fs.writeFileString(statusFile, JSON.stringify(value), { mode: 0o600 })
++  let idleSince: number | undefined
++  while ((yield* registration(options.file))?.pid === server.pid) {
++    // An unreachable server counts as busy: it may be starting a turn we can't see.
++    const running = yield* Effect.tryPromise(() => client.session.active({ signal: AbortSignal.timeout(5_000) })).pipe(
++      Effect.map(Object.keys),
++      Effect.orElseSucceed(() => undefined),
++    )
++    idleSince = running?.length === 0 ? (idleSince ?? Date.now()) : undefined
++    yield* write({ waiter: process.pid, server: server.pid, running: running ?? [], idleSince })
++    if (idleSince !== undefined && Date.now() - idleSince >= QUIET) {
++      yield* Effect.logInfo("restarting the idle server", { server: server.pid, version: server.version })
++      yield* Service.stop({ file: options.file, pty: "handoff" })
++      yield* Service.ensure({ ...options, version: undefined })
++      break
++    }
++    yield* Effect.sleep("2 seconds")
++  }
++  yield* fs.remove(statusFile).pipe(Effect.ignore)
++})
++
++/**
++ * For a client that would replace a server running another version: with `restart idle`, a busy
++ * server is left running and restarts once idle. Returns its endpoint to connect to meanwhile.
++ */
++export const defer = Effect.fnUntraced(function* (options: EnsureOptions & { readonly file: string }) {
++  if ((yield* ServiceConfig.read()).restart !== "idle") return undefined
++  if ((yield* Service.discover(options)) !== undefined) return undefined
++  const existing = yield* Service.discover({ ...options, version: undefined })
++  if (existing === undefined) return undefined
++  const client = OpenCode.make({ baseUrl: existing.url, headers: Service.headers(existing) })
++  const running = yield* Effect.tryPromise(() => client.session.active({ signal: AbortSignal.timeout(5_000) })).pipe(
++    Effect.map((active) => Object.keys(active).length),
++    Effect.orElseSucceed(() => 0),
++  )
++  if (running === 0) return undefined
++  yield* request(options.file)
++  process.stderr.write(
++    `Background server is busy (${running} running session${running === 1 ? "" : "s"}); it restarts into this version once idle.\n`,
++  )
++  return existing
++})
++
++/** In the server: with `restart idle`, a new binary at our own path restarts us once idle. */
++export const watch = Effect.fnUntraced(function* (file: string) {
++  const command = selfCommand()
++  // Only a compiled binary is replaced by an install; `bun run` would watch bun itself.
++  if (command.length !== 1) return
++  const stamp = () =>
++    Effect.promise(() =>
++      Bun.file(command[0]!)
++        .stat()
++        .then((stat) => `${stat.ino}:${stat.size}:${stat.mtimeMs}`)
++        .catch(() => undefined),
++    )
++  let last = yield* stamp()
++  yield* Effect.gen(function* () {
++    const next = yield* stamp()
++    // Missing means mid-install; wait for the new file.
++    if (next === undefined || next === last) return
++    last = next
++    if ((yield* ServiceConfig.read()).restart !== "idle") return
++    yield* Effect.logInfo("new binary installed; restarting when idle", { binary: command[0] })
++    yield* request(file)
++  }).pipe(Effect.repeat(Schedule.spaced("10 seconds")), Effect.forkScoped)
++})
++
++const registration = Effect.fnUntraced(function* (file: string) {
++  const fs = yield* FileSystem.FileSystem
++  const info = Option.getOrUndefined(
++    decodeRegistration(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""))),
++  )
++  return info !== undefined && alive(info.pid) ? info : undefined
++})
++
++function alive(pid: number) {
++  try {
++    return process.kill(pid, 0)
++  } catch {
++    return false
++  }
++}
+diff --git a/packages/cli/src/services/server-connection.ts b/packages/cli/src/services/server-connection.ts
+index 5d2619ad4..000c41fd5 100644
+--- a/packages/cli/src/services/server-connection.ts
++++ b/packages/cli/src/services/server-connection.ts
+@@ -5,6 +5,7 @@ import { Effect, Redacted } from "effect"
+ import { Env } from "../env"
+ import { ServiceConfig } from "./service-config"
+ import { Standalone } from "./standalone"
++import { IdleRestart } from "./idle-restart"
+ 
+ export type Args = {
+   readonly server?: string
+@@ -71,8 +72,11 @@ export const shutdownPersistentPty = Effect.fn("cli.server-connection.shutdown-p
+   yield* Effect.tryPromise(() => client.experimental.persistentPty.shutdown())
+ })
+ 
+-const resolveManaged = Effect.fnUntraced(function* (options: EnsureOptions, mismatch: NonNullable<Args["mismatch"]>) {
+-  if (mismatch === "replace") return yield* Service.ensure(options)
++const resolveManaged = Effect.fnUntraced(function* (
++  options: EnsureOptions & { readonly file: string },
++  mismatch: NonNullable<Args["mismatch"]>,
++) {
++  if (mismatch === "replace") return (yield* IdleRestart.defer(options)) ?? (yield* Service.ensure(options))
+   if (mismatch === "ignore") return yield* Service.ensure({ ...options, version: undefined })
+ 
+   const compatible = yield* Service.discover(options)
+diff --git a/packages/cli/src/services/service-config.ts b/packages/cli/src/services/service-config.ts
+index d857efa91..a01a7f17d 100644
+--- a/packages/cli/src/services/service-config.ts
++++ b/packages/cli/src/services/service-config.ts
+@@ -17,10 +17,12 @@ export const Info = Schema.Struct({
+   password: Schema.optional(Schema.String),
+   cors: Schema.optional(Schema.Array(Schema.String)),
+   env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
++  // ocelot: when an installed update or a newer client restarts the server (see IdleRestart).
++  restart: Schema.optional(Schema.Literals(["immediate", "idle"])),
+ })
+ export type Info = typeof Info.Type
+ 
+-const keys = ["hostname", "port", "password", "cors", "env"] as const
++const keys = ["hostname", "port", "password", "cors", "env", "restart"] as const
+ type Key = (typeof keys)[number]
+ 
+ const decodeInfo = Schema.decodeUnknownEffect(Schema.fromJsonString(Info))
+@@ -78,7 +80,15 @@ export const migrateConfig = Effect.fnUntraced(function* (legacy: string, file:
+ })
+ 
+ function configKey(key: string): Key {
+-  if (key === "hostname" || key === "port" || key === "password" || key === "cors" || key === "env") return key
++  if (
++    key === "hostname" ||
++    key === "port" ||
++    key === "password" ||
++    key === "cors" ||
++    key === "env" ||
++    key === "restart"
++  )
++    return key
+   throw new Error(`Unknown service config key: ${key}`)
+ }
+ 
+@@ -168,6 +178,9 @@ export const get = Effect.fn("cli.service-config.get")(function* (key?: string,
+       const env = (yield* read()).env ?? {}
+       return name === undefined ? JSON.stringify(env, null, 2) : (env[name] ?? "")
+     }
++    case "restart": {
++      return (yield* read()).restart ?? "immediate"
++    }
+   }
+   throw new Error(`Unknown service config key: ${key}`)
+ })
+@@ -214,6 +227,12 @@ export const set = Effect.fn("cli.service-config.set")(function* (key: string, v
+       yield* write({ ...(yield* read()), cors })
+       return
+     }
++    case "restart": {
++      if (value !== "immediate" && value !== "idle") throw new Error("Restart must be immediate or idle")
++      // Read when a restart is due, so the running server needs no restart for this.
++      yield* write({ ...(yield* read()), restart: value })
++      return
++    }
+   }
+ })
+ 
+@@ -254,6 +273,11 @@ export const unset = Effect.fn("cli.service-config.unset")(function* (key: strin
+       yield* write(next)
+       return
+     }
++    case "restart": {
++      const { restart: _restart, ...next } = yield* read()
++      yield* write(next)
++      return
++    }
+   }
+ })
+ 
