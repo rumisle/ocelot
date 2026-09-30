@@ -21,10 +21,10 @@ Client types and openapi.json are regenerated (openapi.json was already stale).
 Ocelot-Patch: core/session-notices
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index 375ea22ec5616b2028f238f890690a31c1412c6b..dd3c6929c39894a46d883bc9ad6953130762a70a 100644
+index 9f01b5983f55b2d21c6919251521ba243fee57cd..e3026a8f8a4bcc653973f0e92bf191e7087f79be 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
-@@ -252,6 +252,27 @@ export type SessionUpdateInput = {
+@@ -261,6 +261,27 @@ export type SessionUpdateInput = {
  export type SessionUpdateOutput = void
  export type SessionUpdateOperation<E = never> = (input: SessionUpdateInput) => Effect.Effect<SessionUpdateOutput, E>
  
@@ -52,7 +52,7 @@ index 375ea22ec5616b2028f238f890690a31c1412c6b..dd3c6929c39894a46d883bc9ad695313
  export type SessionMoveInput = {
    readonly sessionID: Session.ID
    readonly directory: AbsolutePath
-@@ -764,6 +785,37 @@ export type SessionLogOutput =
+@@ -773,6 +794,37 @@ export type SessionLogOutput =
              readonly metadata?: { readonly [x: string]: unknown } | undefined
            }
          }
@@ -90,7 +90,7 @@ index 375ea22ec5616b2028f238f890690a31c1412c6b..dd3c6929c39894a46d883bc9ad695313
        | {
            readonly id: Event.ID
            readonly created: number
-@@ -1422,6 +1474,7 @@ export interface SessionApi<E = never> {
+@@ -1431,6 +1483,7 @@ export interface SessionApi<E = never> {
    readonly switchAgent: SessionSwitchAgentOperation<E>
    readonly switchModel: SessionSwitchModelOperation<E>
    readonly update: SessionUpdateOperation<E>
@@ -98,7 +98,7 @@ index 375ea22ec5616b2028f238f890690a31c1412c6b..dd3c6929c39894a46d883bc9ad695313
    readonly move: SessionMoveOperation<E>
    readonly prompt: SessionPromptOperation<E>
    readonly command: SessionCommandOperation<E>
-@@ -1481,6 +1534,7 @@ export type MessageListInput = {
+@@ -1490,6 +1543,7 @@ export type MessageListInput = {
      | "shell"
      | "assistant"
      | "compaction"
@@ -107,10 +107,10 @@ index 375ea22ec5616b2028f238f890690a31c1412c6b..dd3c6929c39894a46d883bc9ad695313
  }
  export type MessageListOutput = {
 diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
-index 3450f794ffcea7c46311a5e026f0c3544b7a3419..95afdbd67ee9c77fa3d24fa3a8ede03c21b4267f 100644
+index 3cae408d093e6b0fabbfa329179fb84927f9801b..4ef8d2ea20ad86a30ca4d4289ccc3626b1245743 100644
 --- a/packages/client/src/effect/generated/client.ts
 +++ b/packages/client/src/effect/generated/client.ts
-@@ -42,6 +42,8 @@ import type {
+@@ -45,6 +45,8 @@ import type {
    SessionSwitchModelOutput,
    SessionUpdateInput,
    SessionUpdateOutput,
@@ -119,7 +119,7 @@ index 3450f794ffcea7c46311a5e026f0c3544b7a3419..95afdbd67ee9c77fa3d24fa3a8ede03c
    SessionMoveInput,
    SessionMoveOutput,
    SessionPromptInput,
-@@ -461,6 +463,23 @@ const EndpointSessionUpdate = (raw: RawClient["server.session"]) => (input: Sess
+@@ -476,6 +478,23 @@ const EndpointSessionUpdate = (raw: RawClient["server.session"]) => (input: Sess
      }).pipe(Effect.mapError(mapClientError)),
    )
  
@@ -143,7 +143,7 @@ index 3450f794ffcea7c46311a5e026f0c3544b7a3419..95afdbd67ee9c77fa3d24fa3a8ede03c
  const EndpointSessionMove = (raw: RawClient["server.session"]) => (input: SessionMoveInput) =>
    preserveEffect<SessionMoveOutput>()(
      raw["session.move"]({
-@@ -754,6 +773,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
+@@ -769,6 +788,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
    switchAgent: EndpointSessionSwitchAgent(raw),
    switchModel: EndpointSessionSwitchModel(raw),
    update: EndpointSessionUpdate(raw),
@@ -152,10 +152,10 @@ index 3450f794ffcea7c46311a5e026f0c3544b7a3419..95afdbd67ee9c77fa3d24fa3a8ede03c
    prompt: EndpointSessionPrompt(raw),
    command: EndpointSessionCommand(raw),
 diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
-index 97e215583b05b48b409a55af4fd8c89e076991dd..eb77a2aeb020d53dca80dcef6766eb931cada457 100644
+index a20301d71a6cb59b249b05df360467e29e75a4d1..e9a14453e12816c18af257868d022585dec20307 100644
 --- a/packages/client/src/promise/generated/client.ts
 +++ b/packages/client/src/promise/generated/client.ts
-@@ -36,6 +36,8 @@ import type {
+@@ -39,6 +39,8 @@ import type {
    SessionSwitchModelOutput,
    SessionUpdateInput,
    SessionUpdateOutput,
@@ -164,7 +164,7 @@ index 97e215583b05b48b409a55af4fd8c89e076991dd..eb77a2aeb020d53dca80dcef6766eb93
    SessionMoveInput,
    SessionMoveOutput,
    SessionPromptInput,
-@@ -674,6 +676,24 @@ export function make(options: ClientOptions) {
+@@ -693,6 +695,24 @@ export function make(options: ClientOptions) {
            },
            requestOptions,
          ),
@@ -190,10 +190,10 @@ index 97e215583b05b48b409a55af4fd8c89e076991dd..eb77a2aeb020d53dca80dcef6766eb93
          request<SessionMoveOutput>(
            {
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa3748545d9b7df 100644
+index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb3980d13e4b 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
-@@ -159,6 +159,16 @@ export type SessionMessageIdle = {
+@@ -163,6 +163,16 @@ export type SessionMessageIdle = {
    outcome: "succeeded" | "failed" | "interrupted"
  }
  
@@ -210,7 +210,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
  export type SessionActive = { type: "running" }
  
  export type SessionInboxDelivery = "steer" | "queue"
-@@ -698,6 +708,23 @@ export type SessionSynthetic = {
+@@ -704,6 +714,23 @@ export type SessionSynthetic = {
    data: { sessionID: string; text: string; description?: string; metadata?: { [x: string]: any } }
  }
  
@@ -234,7 +234,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
  export type SessionSkillActivated = {
    id: string
    created: number
-@@ -2280,6 +2307,7 @@ export type SessionMessageInfo =
+@@ -2286,6 +2313,7 @@ export type SessionMessageInfo =
    | SessionMessageAssistant
    | SessionMessageCompaction
    | SessionMessageIdle
@@ -242,7 +242,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
  
  export type SessionMessageContentUpdated = {
    id: string
-@@ -2334,6 +2362,7 @@ export type SessionEventDurable =
+@@ -2340,6 +2368,7 @@ export type SessionEventDurable =
    | SessionExecutionInterrupted
    | SessionInstructionsUpdated
    | SessionSynthetic
@@ -250,7 +250,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
    | SessionSkillActivated
    | SessionShellStarted
    | SessionShellEnded
-@@ -2398,6 +2427,7 @@ export type V2Event =
+@@ -2404,6 +2433,7 @@ export type V2Event =
    | SessionExecutionInterrupted
    | SessionInstructionsUpdated
    | SessionSynthetic
@@ -258,7 +258,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
    | SessionSkillActivated
    | SessionShellStarted
    | SessionShellEnded
-@@ -3300,6 +3330,15 @@ export type SessionImportInput = {
+@@ -3312,6 +3342,15 @@ export type SessionImportInput = {
            readonly type: "idle"
            readonly outcome: "succeeded" | "failed" | "interrupted"
          }
@@ -274,7 +274,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
      >
      readonly location?: { readonly directory: string } | null
    }["info"]
-@@ -3622,6 +3661,15 @@ export type SessionImportInput = {
+@@ -3634,6 +3673,15 @@ export type SessionImportInput = {
            readonly type: "idle"
            readonly outcome: "succeeded" | "failed" | "interrupted"
          }
@@ -290,7 +290,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
      >
      readonly location?: { readonly directory: string } | null
    }["messages"]
-@@ -3944,6 +3992,15 @@ export type SessionImportInput = {
+@@ -3956,6 +4004,15 @@ export type SessionImportInput = {
            readonly type: "idle"
            readonly outcome: "succeeded" | "failed" | "interrupted"
          }
@@ -306,7 +306,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
      >
      readonly location?: { readonly directory: string } | null
    }["location"]
-@@ -4019,6 +4076,87 @@ export type SessionUpdateInput = {
+@@ -4031,6 +4088,87 @@ export type SessionUpdateInput = {
  
  export type SessionUpdateOutput = void
  
@@ -394,7 +394,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
  export type SessionMoveInput = {
    readonly sessionID: { readonly sessionID: string }["sessionID"]
    readonly directory: { readonly directory: string; readonly delivery?: ("steer" | "queue") | undefined }["directory"]
-@@ -5427,6 +5565,7 @@ export type MessageListInput = {
+@@ -5439,6 +5577,7 @@ export type MessageListInput = {
        | "shell"
        | "assistant"
        | "compaction"
@@ -402,7 +402,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
        | undefined
    }["limit"]
    readonly order?: {
-@@ -5444,6 +5583,7 @@ export type MessageListInput = {
+@@ -5456,6 +5595,7 @@ export type MessageListInput = {
        | "shell"
        | "assistant"
        | "compaction"
@@ -410,7 +410,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
        | undefined
    }["order"]
    readonly cursor?: {
-@@ -5461,6 +5601,7 @@ export type MessageListInput = {
+@@ -5473,6 +5613,7 @@ export type MessageListInput = {
        | "shell"
        | "assistant"
        | "compaction"
@@ -418,7 +418,7 @@ index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa37485
        | undefined
    }["cursor"]
    readonly type?: {
-@@ -5478,6 +5619,7 @@ export type MessageListInput = {
+@@ -5490,6 +5631,7 @@ export type MessageListInput = {
        | "shell"
        | "assistant"
        | "compaction"
@@ -582,7 +582,7 @@ index f49ddb473a971f8b5d3116ba1f7e2a835438c14f..665c6d0c9cd70118828a68836b6f2158
          if (
            event.type === SessionEvent.Step.Failed.type &&
 diff --git a/packages/core/src/session/runner/to-llm-message.ts b/packages/core/src/session/runner/to-llm-message.ts
-index f475c595121f66d1802d402aa266d48eb09070ac..b2e5a769fc8b17b2ac7b1be8d1b8bb03d41a51e3 100644
+index 34beab0400fedef764c6f4ad58f62e467cb60b25..d60e9d135d499e23f89b644499592405b702feac 100644
 --- a/packages/core/src/session/runner/to-llm-message.ts
 +++ b/packages/core/src/session/runner/to-llm-message.ts
 @@ -251,6 +251,7 @@ function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMe

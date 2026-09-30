@@ -9,10 +9,10 @@ warning color, and live updates append them.
 Ocelot-Patch: tui/session-notices
 
 diff --git a/packages/tui/src/routes/session/index.tsx b/packages/tui/src/routes/session/index.tsx
-index 50970ddbb919e060c33256b3f14f88e4bd51db90..94111c6c84a574fd5ab2d23401a0d8717bb5ddcf 100644
+index d20d92f42aec388ac0a03d70ca7ddd27357c586e..9579b165eabcecbb607296e160ddec031e71d1ff 100644
 --- a/packages/tui/src/routes/session/index.tsx
 +++ b/packages/tui/src/routes/session/index.tsx
-@@ -1766,7 +1766,12 @@ function SessionMessageView(props: { message: SessionMessageInfo }) {
+@@ -1811,7 +1811,12 @@ function SessionMessageView(props: { message: SessionMessageInfo }) {
          <SessionSwitchMessageV2 message={props.message} />
        </Match>
        <Match
@@ -26,7 +26,7 @@ index 50970ddbb919e060c33256b3f14f88e4bd51db90..94111c6c84a574fd5ab2d23401a0d871
        >
          <Show when={props.message.type === "skill"} fallback={<SessionNoticeMessageV2 message={props.message} />}>
            <SessionSkillMessage message={props.message as Extract<SessionMessageInfo, { type: "skill" }>} />
-@@ -1914,6 +1919,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
+@@ -1959,6 +1964,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
    const text = () => {
      if (props.message.type === "system") return props.message.description ?? "Instructions updated"
      if (props.message.type === "synthetic") return props.message.description ?? ""
@@ -34,7 +34,7 @@ index 50970ddbb919e060c33256b3f14f88e4bd51db90..94111c6c84a574fd5ab2d23401a0d871
      return ""
    }
    const description = () => (source() === "shell" ? text().replace(/\s+/g, " ").trim() : text())
-@@ -1934,7 +1940,16 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
+@@ -1979,7 +1985,16 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
      <Show
        when={completion()}
        fallback={
@@ -53,10 +53,10 @@ index 50970ddbb919e060c33256b3f14f88e4bd51db90..94111c6c84a574fd5ab2d23401a0d871
          </InlineToolRow>
        }
 diff --git a/packages/tui/src/routes/session/rows.ts b/packages/tui/src/routes/session/rows.ts
-index e6d81781d9dd73966fc6eb5cf149a27726d1abc2..14f54169e56ee761dbe68e953693b56f550aaf3b 100644
+index 8160e4ae5fc702d7cfccc2038d969627a1cac398..ae2c884801d2807dfde9936eed527372d6ff5a05 100644
 --- a/packages/tui/src/routes/session/rows.ts
 +++ b/packages/tui/src/routes/session/rows.ts
-@@ -251,6 +251,10 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
+@@ -257,6 +257,10 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
          appendMessage(event.id.replace(/^evt_/, "msg_"))
      }),
      data.on("session.shell.started", message),

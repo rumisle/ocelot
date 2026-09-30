@@ -14,7 +14,7 @@ switcher stays visible; the other actions still wait for hover on desktop.
 Ocelot-Patch: web/message-branches
 
 diff --git a/packages/app/src/session/composer/region.tsx b/packages/app/src/session/composer/region.tsx
-index a95e3d2eb7026bda35bd08836b8198539032468e..b1ff894a3fad699cf44ba9f191bae9707b99835c 100644
+index 86fefd7b4d42ffcfdb662ef6fb6893fdf12a9dfe..1fa983fc35bb4017c90210256a082043cd2edd03 100644
 --- a/packages/app/src/session/composer/region.tsx
 +++ b/packages/app/src/session/composer/region.tsx
 @@ -203,6 +203,7 @@ export function createActiveSessionRegion(input: {

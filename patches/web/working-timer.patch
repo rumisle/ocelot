@@ -18,10 +18,10 @@ showed when nothing else looked busy, so it kept appearing and disappearing.
 Ocelot-Patch: web/working-timer
 
 diff --git a/packages/app/src/composer/adapter.ts b/packages/app/src/composer/adapter.ts
-index ffc50788d01f645ba670c406dccfa46f22d96bc1..1a588d2530cfd4b1f11190822d53ea09a0fa2bcc 100644
+index cadfcf0462b2ddfab6a5b58c8d98780fe7e89bc4..a6481b8a9dc54a204427d48024f2a1f30b676910 100644
 --- a/packages/app/src/composer/adapter.ts
 +++ b/packages/app/src/composer/adapter.ts
-@@ -88,6 +88,8 @@ type ComposerAdapterBase = {
+@@ -89,6 +89,8 @@ type ComposerAdapterBase = {
    ready: Accessor<boolean>
    controls: Accessor<ComposerControls>
    working: Accessor<boolean>
@@ -125,7 +125,7 @@ index 4416708189631dd31a7d78e19a17dbfbce74867b..051f6faa3297524ffdecfd9ace254b5d
      }
      setState(reconcile(result.state))
 diff --git a/packages/app/src/composer/model.ts b/packages/app/src/composer/model.ts
-index 83ec6cf2e78fba5fbf0e7d548bcaf0e98c7011c7..1c8201f762e5d17c7726e56826de19f07d100c8b 100644
+index 30979df177ede37116949df1603362b30c2c3a1c..54c5014f4a970627b6c41b950b73e19c63698560 100644
 --- a/packages/app/src/composer/model.ts
 +++ b/packages/app/src/composer/model.ts
 @@ -1,7 +1,7 @@
@@ -172,7 +172,7 @@ index 98ae8bea87d0792ffef1423c9d6a2bbd17e822d0..3bf6c488d5bc81da3fdc5c614d950390
      setEditor: input.setEditor,
      session: () => ({
 diff --git a/packages/app/src/session/timeline/message-timeline.tsx b/packages/app/src/session/timeline/message-timeline.tsx
-index 58fbbaaebfd5baceae537517e72d9cffb08f1d0e..04aa9ec5b5801366461ad7f0a6cf8106ece95bb4 100644
+index 321b4c515fe21395846da0a4bb7e529605507490..25c5bc63d962d8e652ef7d627398464ac86c0168 100644
 --- a/packages/app/src/session/timeline/message-timeline.tsx
 +++ b/packages/app/src/session/timeline/message-timeline.tsx
 @@ -19,7 +19,6 @@ import { IconButton } from "@opencode/ui/icon-button"
@@ -183,7 +183,7 @@ index 58fbbaaebfd5baceae537517e72d9cffb08f1d0e..04aa9ec5b5801366461ad7f0a6cf8106
  import { SummaryPopover } from "../summary/popover"
  import { SessionContextUsage } from "@/session/timeline/session-context-usage"
  import { useLanguage } from "@/runtime/i18n/language"
-@@ -316,53 +315,12 @@ function MessageTimelineView(
+@@ -315,53 +314,12 @@ function MessageTimelineView(
      sessionID,
      1000,
    )
@@ -239,7 +239,7 @@ index 58fbbaaebfd5baceae537517e72d9cffb08f1d0e..04aa9ec5b5801366461ad7f0a6cf8106
            <div
              classList={{
                "min-w-0 w-full max-w-full": true,
-@@ -372,11 +330,6 @@ function MessageTimelineView(
+@@ -371,11 +329,6 @@ function MessageTimelineView(
              <div
                class={`flex h-9 items-center gap-2 pt-3 text-[13px] font-[530] leading-text-compact ${turnPadding()}`}
              >

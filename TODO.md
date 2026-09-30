@@ -99,9 +99,9 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 ### Mobile
 - [ ] (later) Top bar → two floating buttons; it wastes a lot of vertical space.
 
-- [x] Password prompt in the app: patch `web/password-prompt`. The server sends the Basic challenge
-      only to page loads and non-browser clients; the app asks for a server's password on 401 and
-      saves it (the browser's dialog answer was never saved: iOS home screen apps asked every launch).
+- [x] Password prompt in the app. Dropped `web/password-prompt` in 2.0.19: upstream now sends the
+      Basic challenge only to page loads (#50970) and shows a sign-in screen with address, password,
+      one-time link (`ocelot pair`) and QR scan when the server rejects the app (#50972).
 
 ### Plugin UI in the web app
 - [ ] General way for plugins to add UI to the web app (upstream only has TUI plugin slots).

@@ -10,10 +10,10 @@ Claude plan: the cost then shows what the same usage would cost on the API.
 Ocelot-Patch: core/subscription-cost
 
 diff --git a/packages/core/src/plugin/provider/openai.ts b/packages/core/src/plugin/provider/openai.ts
-index 255cbb2cfcc42e2fe56349c53901727df97c0852..a23cb99a86eb94a6a7d9a1cf21a30870c6c61056 100644
+index 092758cbd1de24e6d27125d056a801a789ac09c4..c0da7aa731c73a9026692e76fefcf8c77f7b5415 100644
 --- a/packages/core/src/plugin/provider/openai.ts
 +++ b/packages/core/src/plugin/provider/openai.ts
-@@ -270,8 +270,7 @@ export const OpenAIPlugin = define({
+@@ -272,8 +272,7 @@ export const OpenAIPlugin = define({
      })
      yield* ctx.model.transform((models) => {
        for (const model of models.list(Provider.ID.openai)) {
@@ -23,7 +23,7 @@ index 255cbb2cfcc42e2fe56349c53901727df97c0852..a23cb99a86eb94a6a7d9a1cf21a30870
          models.update(model.providerID, model.id, (draft) => {
            if (!chatgpt) return
            if (Schema.is(Schema.Struct({ mode: Schema.Literal("pro") }))(draft.body?.reasoning)) {
-@@ -289,7 +288,6 @@ export const OpenAIPlugin = define({
+@@ -291,7 +290,6 @@ export const OpenAIPlugin = define({
              draft.enabled = false
              return
            }
@@ -32,10 +32,10 @@ index 255cbb2cfcc42e2fe56349c53901727df97c0852..a23cb99a86eb94a6a7d9a1cf21a30870
            draft.limit = { ...draft.limit, context: 400_000, input: 272_000 }
          })
 diff --git a/packages/core/test/plugin/provider-openai.test.ts b/packages/core/test/plugin/provider-openai.test.ts
-index 2f6725f3cf2fe92fe8dcbef94352185aecb97cc4..82f528dc0bb2c1892762cf3e471c960152a632ea 100644
+index 1374d6b4e8e86fca124dc46b237d717142eb8f3d..8453b1fe400e342293a62ca5544edd77948169a0 100644
 --- a/packages/core/test/plugin/provider-openai.test.ts
 +++ b/packages/core/test/plugin/provider-openai.test.ts
-@@ -159,7 +159,8 @@ describe("OpenAIPlugin", () => {
+@@ -169,7 +169,8 @@ describe("OpenAIPlugin", () => {
        const eligible = required(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-5.5")))
        expect(eligible.package).toBe("@opencode/ai/providers/openai")
        expect(eligible.headers).toMatchObject({ originator: "opencode", "chatgpt-account-id": "acct_123" })

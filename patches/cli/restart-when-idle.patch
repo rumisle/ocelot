@@ -19,10 +19,10 @@ its progress is `<registration>.restart`, shown by `ocelot service status`.
 Ocelot-Patch: cli/restart-when-idle
 
 diff --git a/packages/cli/src/commands/commands.ts b/packages/cli/src/commands/commands.ts
-index 682953ae97a48c12350bbe1547849c743534b23a..435d521d4dbf3f15d47cb9db3771916c5c475113 100644
+index f5622d215fa51d65d62684f61b5524a9002dfab2..7cf7dc26dbfdca1726626b67bd2800ad8da67633 100644
 --- a/packages/cli/src/commands/commands.ts
 +++ b/packages/cli/src/commands/commands.ts
-@@ -450,7 +450,16 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
+@@ -452,7 +452,16 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
        description: "Manage the background server",
        commands: [
          Spec.make("start", { description: "Start the background server" }),

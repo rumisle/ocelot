@@ -18,10 +18,10 @@ the same message.
 Ocelot-Patch: core/refusal-reason
 
 diff --git a/packages/ai/src/protocols/anthropic-messages.ts b/packages/ai/src/protocols/anthropic-messages.ts
-index 60ec3c49e68383143c8ae4ec9c99ad0a5c2a53f1..1be8e8026ceefe2651ce51210e290a3ab790b972 100644
+index 33805d8e2831b35676941e29b3b437e49df6eb8a..9c0a002a5ce1bf895a5d9f2e49ffda06ae78e4c7 100644
 --- a/packages/ai/src/protocols/anthropic-messages.ts
 +++ b/packages/ai/src/protocols/anthropic-messages.ts
-@@ -451,6 +451,14 @@ const AnthropicStreamDelta = Schema.Struct({
+@@ -450,6 +450,14 @@ const AnthropicStreamDelta = Schema.Struct({
    signature: Schema.optional(Schema.String),
    stop_reason: optionalNull(Schema.String),
    stop_sequence: optionalNull(Schema.String),
@@ -36,7 +36,7 @@ index 60ec3c49e68383143c8ae4ec9c99ad0a5c2a53f1..1be8e8026ceefe2651ce51210e290a3a
  })
  type AnthropicStreamDelta = Schema.Schema.Type<typeof AnthropicStreamDelta>
  const decodeAnthropicStreamDelta = Schema.decodeUnknownOption(AnthropicStreamDelta)
-@@ -1424,10 +1432,16 @@ const onMessageDelta = (
+@@ -1428,10 +1436,16 @@ const onMessageDelta = (
      if (stopReason === null || stopReason === undefined) return state.pendingFinish
  
      const stopSequence = event.delta?.stop_sequence
@@ -56,10 +56,10 @@ index 60ec3c49e68383143c8ae4ec9c99ad0a5c2a53f1..1be8e8026ceefe2651ce51210e290a3a
        reason: {
          normalized: mapFinishReason(stopReason),
 diff --git a/packages/ai/test/provider/anthropic-messages.test.ts b/packages/ai/test/provider/anthropic-messages.test.ts
-index 3b5c46b81794510c35f1c1ef1573c1b1668e4b2c..ea14da1960cae99dd2dee02225815d7f1ed78adc 100644
+index 173a8c7b8f98b3782a712745dd1650a3074e6de3..6777e06534cb4307a9ee70194a6ae21dc4751ec2 100644
 --- a/packages/ai/test/provider/anthropic-messages.test.ts
 +++ b/packages/ai/test/provider/anthropic-messages.test.ts
-@@ -1132,6 +1132,43 @@ describe("Anthropic Messages route", () => {
+@@ -1150,6 +1150,43 @@ describe("Anthropic Messages route", () => {
      }),
    )
  
@@ -104,26 +104,26 @@ index 3b5c46b81794510c35f1c1ef1573c1b1668e4b2c..ea14da1960cae99dd2dee02225815d7f
      Effect.gen(function* () {
        const response = yield* LLMClient.generate(request).pipe(
 diff --git a/packages/core/src/session/compaction.ts b/packages/core/src/session/compaction.ts
-index fc9d16799a0d77ea21c049d07c88101d7d794ad5..cbd47a3a9913116e0b7ae30d7d51faf2c9d73f57 100644
+index 5de1ef8dc1b4d8725683de2fe8674f942303c0c8..baa80a857fbefa912c0ef54437b05cecb93b9c9c 100644
 --- a/packages/core/src/session/compaction.ts
 +++ b/packages/core/src/session/compaction.ts
-@@ -36,6 +36,7 @@ import { State } from "../state.js"
+@@ -34,6 +34,7 @@ import { SessionRunnerRetry } from "./runner/retry.js"
  import { toLLMMessages } from "./runner/to-llm-message.js"
- import type { AgentNotFoundError } from "./error.js"
- import type { Instructions } from "../instructions/index.js"
+ import { toSessionError } from "./to-session-error.js"
+ import { SessionUsage } from "./usage.js"
 +import { SessionRefusal } from "./refusal.js"
  
- const DEFAULT_BUFFER = 20_000
- const DEFAULT_KEEP_TOKENS = 15_000
-@@ -677,7 +678,7 @@ export const layer = Layer.effect(
-               if (event.reason.normalized === "content-filter")
-                 failure = {
+ export type Settings = {
+   auto: boolean
+@@ -542,7 +543,7 @@ export const layer = Layer.effect(
+               case "content-filter":
+                 return unusable({
                    type: "provider.content-filter",
 -                  message: "Compaction summary was blocked by the provider",
 +                  message: SessionRefusal.message(event.providerMetadata, "the compaction summary"),
-                 }
-               if (event.reason.normalized === "unknown")
-                 return Effect.fail(
+                 })
+               default:
+                 return Effect.succeed(streamed)
 diff --git a/packages/core/src/session/refusal.ts b/packages/core/src/session/refusal.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..9be37d8bb53dd4e1279c14472d882bc10563b02e
@@ -151,7 +151,7 @@ index 0000000000000000000000000000000000000000..9be37d8bb53dd4e1279c14472d882bc1
 +  return `${head}${why} Retrying the same conversation is usually stopped again: edit or rephrase your last message, or switch model.`
 +}
 diff --git a/packages/core/src/session/runner/publish-llm-event.ts b/packages/core/src/session/runner/publish-llm-event.ts
-index ffb9baa14d63366a124fd84f9cec00a64ba86d97..ebb7956f5ec0545f45540a6aed81475a29254ad6 100644
+index cf970bd4bfb007338af12d3e63e23fcab0feb5fb..79e031e5c769a9e3bab8d0cd8ece00c48e2bd349 100644
 --- a/packages/core/src/session/runner/publish-llm-event.ts
 +++ b/packages/core/src/session/runner/publish-llm-event.ts
 @@ -12,6 +12,7 @@ import { SessionSchema } from "../schema.js"
@@ -162,7 +162,7 @@ index ffb9baa14d63366a124fd84f9cec00a64ba86d97..ebb7956f5ec0545f45540a6aed81475a
  import type { Tool } from "../../tool.js"
  
  type Input = {
-@@ -534,7 +535,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
+@@ -551,7 +552,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
          }
          if (event.reason.normalized === "content-filter") {
            providerFailed = true
@@ -172,10 +172,10 @@ index ffb9baa14d63366a124fd84f9cec00a64ba86d97..ebb7956f5ec0545f45540a6aed81475a
          }
          return
 diff --git a/packages/core/test/session-runner-tool-events.test.ts b/packages/core/test/session-runner-tool-events.test.ts
-index a15b20df6da6089be5b7a70d9cc8daf49197a181..817086caaaef2fa49945bdb1f68ed5467830db01 100644
+index 2c09ea71f5f21ad8a8696455db29b9ed9073da81..494fd53d5e0811a94a6307844d2a92ceec11a21e 100644
 --- a/packages/core/test/session-runner-tool-events.test.ts
 +++ b/packages/core/test/session-runner-tool-events.test.ts
-@@ -592,7 +592,11 @@ test("content-filter finish retains failure evidence until step closeout", async
+@@ -632,7 +632,11 @@ test("content-filter finish retains failure evidence until step closeout", async
    )
    expect(published.map((event) => event.type)).toEqual(["session.step.started.1", "session.step.failed.1"])
    expect(published.at(-1)?.data).toMatchObject({
@@ -189,10 +189,10 @@ index a15b20df6da6089be5b7a70d9cc8daf49197a181..817086caaaef2fa49945bdb1f68ed546
      rawFinish: "refusal",
      providerState: {
 diff --git a/packages/core/test/session-runner.test.ts b/packages/core/test/session-runner.test.ts
-index f41f61e7472560f67b88354cda5f9e4cf1c9fc6f..b7db8f2bfc328809593b161765bf96dfc399d7bf 100644
+index 5023d5c397e8551994f8ce4b99d277528bcf185a..5a46ab07f7a6342af96c4ef1aac851569802ddc9 100644
 --- a/packages/core/test/session-runner.test.ts
 +++ b/packages/core/test/session-runner.test.ts
-@@ -4990,7 +4990,10 @@ describe("SessionRunnerLLM", () => {
+@@ -5275,7 +5275,10 @@ describe("SessionRunnerLLM", () => {
        ),
      )
  
@@ -204,7 +204,7 @@ index f41f61e7472560f67b88354cda5f9e4cf1c9fc6f..b7db8f2bfc328809593b161765bf96df
      expect(yield* s.context).toMatchObject([
        { type: "user" },
        {
-@@ -5027,7 +5030,7 @@ describe("SessionRunnerLLM", () => {
+@@ -5312,7 +5315,7 @@ describe("SessionRunnerLLM", () => {
      const run = yield* s.resume.pipe(Effect.forkChild)
      yield* tools.started
      yield* tools.release

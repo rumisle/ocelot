@@ -13,7 +13,7 @@ back to "OpenCode" when you leave the session.
 Ocelot-Patch: web/page-title
 
 diff --git a/packages/app/src/session/screen.tsx b/packages/app/src/session/screen.tsx
-index 71fe3a9a2519d3389722f93dffb3fafd4b8d8877..03194d35b1ceff1001884388db2e5759d0d5d6b9 100644
+index a69394ccaac66cddba8fbfeab509437044cbff80..05d35f9db278733373c3a9bb44ddabac8aa54c0e 100644
 --- a/packages/app/src/session/screen.tsx
 +++ b/packages/app/src/session/screen.tsx
 @@ -9,6 +9,7 @@ import {
@@ -24,7 +24,7 @@ index 71fe3a9a2519d3389722f93dffb3fafd4b8d8877..03194d35b1ceff1001884388db2e5759
  } from "solid-js"
  import { createStore } from "solid-js/store"
  import { ResizeHandle } from "@opencode/ui/resize-handle"
-@@ -37,6 +38,7 @@ import { createSessionBrowser } from "./browser/model"
+@@ -36,6 +37,7 @@ import { createSessionBrowser } from "./browser/model"
  import { createTimelineCache } from "./timeline/cache"
  import { ArtifactMarkdownProvider, ArtifactOpenerProvider } from "./files/open-artifact"
  import { createSessionBtw } from "./btw/model"
@@ -32,7 +32,7 @@ index 71fe3a9a2519d3389722f93dffb3fafd4b8d8877..03194d35b1ceff1001884388db2e5759
  
  const SessionMobileFiles = lazy(async () => {
    const { SessionMobileFiles } = await import("./files/session-mobile-files")
-@@ -64,6 +66,14 @@ function SessionScreenContent(props: { session: SessionModel; browser: ReturnTyp
+@@ -63,6 +65,14 @@ function SessionScreenContent(props: { session: SessionModel; browser: ReturnTyp
    const session = props.session
    const browser = props.browser
    const server = useServer()
@@ -46,4 +46,4 @@ index 71fe3a9a2519d3389722f93dffb3fafd4b8d8877..03194d35b1ceff1001884388db2e5759
 +  })
    const detailsProject = createMemo(() => {
      const info = session.data.info()
-     return info ? projectForSession(info, server.ctx.sync.data.project) : undefined
+     return info ? server.ctx.projects.detailsForSession(info) : undefined

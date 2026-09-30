@@ -27,10 +27,10 @@ messages when a branch is switched elsewhere.
 Ocelot-Patch: core/message-branches
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index dd3c6929c39894a46d883bc9ad6953130762a70a..8c12bccc96c61a17210752a496f3eda3ea876a05 100644
+index e3026a8f8a4bcc653973f0e92bf191e7087f79be..e05af09eb627166cc35e9c4023fc9a9803ba74e6 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
-@@ -371,6 +371,26 @@ export type SessionRevertCommitOperation<E = never> = (
+@@ -380,6 +380,26 @@ export type SessionRevertCommitOperation<E = never> = (
    input: SessionRevertCommitInput,
  ) => Effect.Effect<SessionRevertCommitOutput, E>
  
@@ -57,7 +57,7 @@ index dd3c6929c39894a46d883bc9ad6953130762a70a..8c12bccc96c61a17210752a496f3eda3
  export type SessionContextInput = { readonly sessionID: Session.ID }
  export type SessionContextOutput = ReadonlyArray<SessionMessage.Info>
  export type SessionContextOperation<E = never> = (input: SessionContextInput) => Effect.Effect<SessionContextOutput, E>
-@@ -1346,6 +1366,20 @@ export type SessionLogOutput =
+@@ -1355,6 +1375,20 @@ export type SessionLogOutput =
              | undefined
            readonly data: { readonly sessionID: Session.ID; readonly to: SessionMessage.ID }
          }
@@ -78,7 +78,7 @@ index dd3c6929c39894a46d883bc9ad6953130762a70a..8c12bccc96c61a17210752a496f3eda3
        | {
            readonly id: Event.ID
            readonly created: number
-@@ -1488,6 +1522,7 @@ export interface SessionApi<E = never> {
+@@ -1497,6 +1531,7 @@ export interface SessionApi<E = never> {
      readonly clear: SessionRevertClearOperation<E>
      readonly commit: SessionRevertCommitOperation<E>
    }
@@ -87,10 +87,10 @@ index dd3c6929c39894a46d883bc9ad6953130762a70a..8c12bccc96c61a17210752a496f3eda3
    readonly diff: SessionDiffOperation<E>
    readonly inbox: {
 diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
-index 95afdbd67ee9c77fa3d24fa3a8ede03c21b4267f..563920ff94ba4e6b3d5d85000248f44e7bb695a4 100644
+index 4ef8d2ea20ad86a30ca4d4289ccc3626b1245743..6816d0744266d2dc4e02e213f3c3b82ee0c01eb6 100644
 --- a/packages/client/src/effect/generated/client.ts
 +++ b/packages/client/src/effect/generated/client.ts
-@@ -66,6 +66,10 @@ import type {
+@@ -69,6 +69,10 @@ import type {
    SessionRevertClearOutput,
    SessionRevertCommitInput,
    SessionRevertCommitOutput,
@@ -101,7 +101,7 @@ index 95afdbd67ee9c77fa3d24fa3a8ede03c21b4267f..563920ff94ba4e6b3d5d85000248f44e
    SessionContextInput,
    SessionContextOutput,
    SessionDiffInput,
-@@ -594,6 +598,25 @@ const EndpointSessionRevertCommit = (raw: RawClient["server.session"]) => (input
+@@ -609,6 +613,25 @@ const EndpointSessionRevertCommit = (raw: RawClient["server.session"]) => (input
      raw["session.revert.commit"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
    )
  
@@ -127,7 +127,7 @@ index 95afdbd67ee9c77fa3d24fa3a8ede03c21b4267f..563920ff94ba4e6b3d5d85000248f44e
  const EndpointSessionContext = (raw: RawClient["server.session"]) => (input: SessionContextInput) =>
    preserveEffect<SessionContextOutput>()(
      raw["session.context"]({ params: { sessionID: input["sessionID"] } }).pipe(
-@@ -787,6 +810,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
+@@ -802,6 +825,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
      clear: EndpointSessionRevertClear(raw),
      commit: EndpointSessionRevertCommit(raw),
    },
@@ -136,10 +136,10 @@ index 95afdbd67ee9c77fa3d24fa3a8ede03c21b4267f..563920ff94ba4e6b3d5d85000248f44e
    diff: EndpointSessionDiff(raw),
    inbox: {
 diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
-index eb77a2aeb020d53dca80dcef6766eb931cada457..c155f9410144cd8cdffb46836a4157f84c8d48f8 100644
+index e9a14453e12816c18af257868d022585dec20307..a0457753fea9b135a60d6b50872be1a90f70f019 100644
 --- a/packages/client/src/promise/generated/client.ts
 +++ b/packages/client/src/promise/generated/client.ts
-@@ -60,6 +60,10 @@ import type {
+@@ -63,6 +63,10 @@ import type {
    SessionRevertClearOutput,
    SessionRevertCommitInput,
    SessionRevertCommitOutput,
@@ -150,7 +150,7 @@ index eb77a2aeb020d53dca80dcef6766eb931cada457..c155f9410144cd8cdffb46836a4157f8
    SessionContextInput,
    SessionContextOutput,
    SessionDiffInput,
-@@ -848,6 +852,31 @@ export function make(options: ClientOptions) {
+@@ -867,6 +871,31 @@ export function make(options: ClientOptions) {
              requestOptions,
            ),
        },
@@ -183,10 +183,10 @@ index eb77a2aeb020d53dca80dcef6766eb931cada457..c155f9410144cd8cdffb46836a4157f8
          request<{ readonly data: SessionContextOutput }>(
            {
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index 2e35667ded490efc4a9eaa634fa3748545d9b7df..eae113613555efb7ac2e5caf639f12fa7b96e033 100644
+index 36c7334c9074562267e59591747bbb3980d13e4b..d269c89d834a0f6a84bde3811cc4207b3d189576 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
-@@ -849,6 +849,16 @@ export type SessionRevertCommitted = {
+@@ -855,6 +855,16 @@ export type SessionRevertCommitted = {
    data: { sessionID: string; to: string }
  }
  
@@ -203,7 +203,7 @@ index 2e35667ded490efc4a9eaa634fa3748545d9b7df..eae113613555efb7ac2e5caf639f12fa
  export type SessionUsageRecorded = {
    id: string
    created: number
-@@ -2386,6 +2396,7 @@ export type SessionEventDurable =
+@@ -2392,6 +2402,7 @@ export type SessionEventDurable =
    | SessionRevertStaged
    | SessionRevertCleared
    | SessionRevertCommitted
@@ -211,7 +211,7 @@ index 2e35667ded490efc4a9eaa634fa3748545d9b7df..eae113613555efb7ac2e5caf639f12fa
    | SessionUsageRecorded
    | SessionMessageContentUpdated
  
-@@ -2456,6 +2467,7 @@ export type V2Event =
+@@ -2462,6 +2473,7 @@ export type V2Event =
    | SessionRevertStaged
    | SessionRevertCleared
    | SessionRevertCommitted
@@ -219,7 +219,7 @@ index 2e35667ded490efc4a9eaa634fa3748545d9b7df..eae113613555efb7ac2e5caf639f12fa
    | FilesystemChanged
    | ReferenceUpdated
    | PermissionAsked
-@@ -4560,6 +4572,23 @@ export type SessionRevertCommitInput = { readonly sessionID: { readonly sessionI
+@@ -4572,6 +4584,23 @@ export type SessionRevertCommitInput = { readonly sessionID: { readonly sessionI
  
  export type SessionRevertCommitOutput = void
  

@@ -12,10 +12,10 @@ the client's generated types are regenerated (packages/client: bun run generate)
 Ocelot-Patch: core/first-output-time
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index b86373a5e5e1d838d91e79641f2ff961851d447a..c44dc073089a4bd4a9225efb9968befe5c12e82b 100644
+index a4890a7b9b69a14eba66419c8c0c8f06db9f8acb..9d800ac189b0725a17b5e834189e48a1b8c9a75f 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
-@@ -847,7 +847,11 @@ export type SessionLogOutput =
+@@ -856,7 +856,11 @@ export type SessionLogOutput =
                  readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
                }
              | undefined
@@ -29,10 +29,10 @@ index b86373a5e5e1d838d91e79641f2ff961851d447a..c44dc073089a4bd4a9225efb9968befe
        | {
            readonly id: Event.ID
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index a7d41240fb1434586680e92b2bf7efd1b2106123..afa029e043ee72597287b7aebb04b7819dda5fbe 100644
+index 4d51de939f71fd83ef0369c614f09681fa55cbe6..736b0a54572da1325d2ec7e91c89fd5366f08736 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
-@@ -732,7 +732,7 @@ export type SessionStepStreamed = {
+@@ -738,7 +738,7 @@ export type SessionStepStreamed = {
    type: "session.step.streamed"
    durable: { aggregateID: string; seq: number; version: 1 }
    location?: LocationRef
@@ -41,7 +41,7 @@ index a7d41240fb1434586680e92b2bf7efd1b2106123..afa029e043ee72597287b7aebb04b781
  }
  
  export type SessionTextStarted = {
-@@ -2230,7 +2230,7 @@ export type SessionInboxEnqueued = {
+@@ -2236,7 +2236,7 @@ export type SessionInboxEnqueued = {
  export type SessionMessageAssistant = {
    id: string
    metadata?: { [x: string]: JsonValue }
@@ -50,7 +50,7 @@ index a7d41240fb1434586680e92b2bf7efd1b2106123..afa029e043ee72597287b7aebb04b781
    type: "assistant"
    agent: string
    model: ModelRef
-@@ -3109,7 +3109,12 @@ export type SessionImportInput = {
+@@ -3121,7 +3121,12 @@ export type SessionImportInput = {
        | {
            readonly id: string
            readonly metadata?: { readonly [x: string]: JsonValue }
@@ -64,7 +64,7 @@ index a7d41240fb1434586680e92b2bf7efd1b2106123..afa029e043ee72597287b7aebb04b781
            readonly type: "assistant"
            readonly agent: string
            readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
-@@ -3426,7 +3431,12 @@ export type SessionImportInput = {
+@@ -3438,7 +3443,12 @@ export type SessionImportInput = {
        | {
            readonly id: string
            readonly metadata?: { readonly [x: string]: JsonValue }
@@ -78,7 +78,7 @@ index a7d41240fb1434586680e92b2bf7efd1b2106123..afa029e043ee72597287b7aebb04b781
            readonly type: "assistant"
            readonly agent: string
            readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
-@@ -3743,7 +3753,12 @@ export type SessionImportInput = {
+@@ -3755,7 +3765,12 @@ export type SessionImportInput = {
        | {
            readonly id: string
            readonly metadata?: { readonly [x: string]: JsonValue }
@@ -133,7 +133,7 @@ index 6d2a40e4195a30707cd5397bf8a422a50bb40936..e39c659e2cafa2990cd8ee62c140bff2
        },
        "session.step.ended": (event) => {
 diff --git a/packages/core/src/session/runner/publish-llm-event.ts b/packages/core/src/session/runner/publish-llm-event.ts
-index 834a023a1935417933a35b86badb4254cde6d711..ffb9baa14d63366a124fd84f9cec00a64ba86d97 100644
+index 03367a8ed1b020f031d9f75eaedcb4a215ba6d18..cf970bd4bfb007338af12d3e63e23fcab0feb5fb 100644
 --- a/packages/core/src/session/runner/publish-llm-event.ts
 +++ b/packages/core/src/session/runner/publish-llm-event.ts
 @@ -93,6 +93,8 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
@@ -153,7 +153,7 @@ index 834a023a1935417933a35b86badb4254cde6d711..ffb9baa14d63366a124fd84f9cec00a6
      })
    })
    const providerState = (metadata: ProviderMetadata | undefined) => metadata?.[input.providerMetadataKey]
-@@ -383,6 +386,11 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
+@@ -398,6 +401,11 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
    )
  
    const publish = Effect.fnUntraced(function* (event: LLMEvent) {

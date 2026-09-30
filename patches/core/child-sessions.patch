@@ -17,10 +17,10 @@ instead of a 500. The fork flag follows the maintainer draft #51095
 Ocelot-Patch: core/child-sessions
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index c44dc073089a4bd4a9225efb9968befe5c12e82b..375ea22ec5616b2028f238f890690a31c1412c6b 100644
+index 9d800ac189b0725a17b5e834189e48a1b8c9a75f..9f01b5983f55b2d21c6919251521ba243fee57cd 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
-@@ -191,6 +191,7 @@ export type SessionCreateInput = {
+@@ -200,6 +200,7 @@ export type SessionCreateInput = {
    readonly id?: Session.ID | undefined
    readonly title?: string | undefined
    readonly agent?: Agent.ID | undefined
@@ -28,7 +28,7 @@ index c44dc073089a4bd4a9225efb9968befe5c12e82b..375ea22ec5616b2028f238f890690a31
    readonly model?: Model.Ref | undefined
    readonly location?: Location.PublicRef | undefined
    readonly metadata?: Session.Metadata | undefined
-@@ -222,7 +223,11 @@ export type SessionRemoveInput = { readonly sessionID: Session.ID }
+@@ -231,7 +232,11 @@ export type SessionRemoveInput = { readonly sessionID: Session.ID }
  export type SessionRemoveOutput = void
  export type SessionRemoveOperation<E = never> = (input: SessionRemoveInput) => Effect.Effect<SessionRemoveOutput, E>
  
@@ -41,7 +41,7 @@ index c44dc073089a4bd4a9225efb9968befe5c12e82b..375ea22ec5616b2028f238f890690a31
  export type SessionForkOutput = Session.Info
  export type SessionForkOperation<E = never> = (input: SessionForkInput) => Effect.Effect<SessionForkOutput, E>
  
-@@ -589,6 +594,7 @@ export type SessionLogOutput =
+@@ -598,6 +603,7 @@ export type SessionLogOutput =
              readonly sessionID: Session.ID
              readonly parentID: Session.ID
              readonly boundary: Session.ForkBoundary
@@ -50,10 +50,10 @@ index c44dc073089a4bd4a9225efb9968befe5c12e82b..375ea22ec5616b2028f238f890690a31
                | { readonly [x: string & Brand.Brand<"Instruction.Key">]: string & Brand.Brand<"Instruction.Hash"> }
                | undefined
 diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
-index 4e1499c324c16d8618a54e95a5c006b8118ea598..3450f794ffcea7c46311a5e026f0c3544b7a3419 100644
+index 94f8c30f4227e76b0e02efe927d0af44cdd97ab2..3cae408d093e6b0fabbfa329179fb84927f9801b 100644
 --- a/packages/client/src/effect/generated/client.ts
 +++ b/packages/client/src/effect/generated/client.ts
-@@ -377,6 +377,7 @@ const EndpointSessionCreate = (raw: RawClient["server.session"]) => (input?: Ses
+@@ -392,6 +392,7 @@ const EndpointSessionCreate = (raw: RawClient["server.session"]) => (input?: Ses
          id: input?.["id"],
          title: input?.["title"],
          agent: input?.["agent"],
@@ -61,7 +61,7 @@ index 4e1499c324c16d8618a54e95a5c006b8118ea598..3450f794ffcea7c46311a5e026f0c354
          model: input?.["model"],
          location: input?.["location"],
          metadata: input?.["metadata"],
-@@ -429,7 +430,10 @@ const EndpointSessionRemove = (raw: RawClient["server.session"]) => (input: Sess
+@@ -444,7 +445,10 @@ const EndpointSessionRemove = (raw: RawClient["server.session"]) => (input: Sess
  
  const EndpointSessionFork = (raw: RawClient["server.session"]) => (input: SessionForkInput) =>
    preserveEffect<SessionForkOutput>()(
@@ -74,10 +74,10 @@ index 4e1499c324c16d8618a54e95a5c006b8118ea598..3450f794ffcea7c46311a5e026f0c354
        Effect.map((value) => value.data),
      ),
 diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
-index 79cf0da92bfa55d0a517fb4c97b73ff885febfe3..97e215583b05b48b409a55af4fd8c89e076991dd 100644
+index 60653cc73335a835b0ab1129903ee22acb446511..a20301d71a6cb59b249b05df360467e29e75a4d1 100644
 --- a/packages/client/src/promise/generated/client.ts
 +++ b/packages/client/src/promise/generated/client.ts
-@@ -557,13 +557,14 @@ export function make(options: ClientOptions) {
+@@ -576,13 +576,14 @@ export function make(options: ClientOptions) {
                id: input?.["id"],
                title: input?.["title"],
                agent: input?.["agent"],
@@ -93,7 +93,7 @@ index 79cf0da92bfa55d0a517fb4c97b73ff885febfe3..97e215583b05b48b409a55af4fd8c89e
              empty: false,
            },
            requestOptions,
-@@ -630,7 +631,7 @@ export function make(options: ClientOptions) {
+@@ -649,7 +650,7 @@ export function make(options: ClientOptions) {
            {
              method: "POST",
              path: `/api/session/${encodeURIComponent(input.sessionID)}/fork`,
@@ -103,10 +103,10 @@ index 79cf0da92bfa55d0a517fb4c97b73ff885febfe3..97e215583b05b48b409a55af4fd8c89e
              declaredStatuses: [400, 401, 404],
              empty: false,
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index afa029e043ee72597287b7aebb04b7819dda5fbe..63812dedba593f33ec66194d60f832a067a3f972 100644
+index 736b0a54572da1325d2ec7e91c89fd5366f08736..cf7e78a10bb21f373ce069f264e33c2a108ac060 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
-@@ -1811,6 +1811,7 @@ export type SessionForked = {
+@@ -1817,6 +1817,7 @@ export type SessionForked = {
      sessionID: string
      parentID: string
      boundary: SessionForkBoundary
@@ -114,7 +114,7 @@ index afa029e043ee72597287b7aebb04b7819dda5fbe..63812dedba593f33ec66194d60f832a0
      instructions?: { [x: string]: string }
      instructionEntries?: InstructionEntrySnapshot
    }
-@@ -2867,6 +2868,7 @@ export type SessionCreateInput = {
+@@ -2879,6 +2880,7 @@ export type SessionCreateInput = {
      readonly id?: string | null
      readonly title?: string | null
      readonly agent?: string | null
@@ -122,7 +122,7 @@ index afa029e043ee72597287b7aebb04b7819dda5fbe..63812dedba593f33ec66194d60f832a0
      readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
      readonly location?: { readonly directory: string } | null
      readonly metadata?: { readonly [x: string]: JsonValue } | null
-@@ -2880,6 +2882,7 @@ export type SessionCreateInput = {
+@@ -2892,6 +2894,7 @@ export type SessionCreateInput = {
      readonly id?: string | null
      readonly title?: string | null
      readonly agent?: string | null
@@ -130,7 +130,7 @@ index afa029e043ee72597287b7aebb04b7819dda5fbe..63812dedba593f33ec66194d60f832a0
      readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
      readonly location?: { readonly directory: string } | null
      readonly metadata?: { readonly [x: string]: JsonValue } | null
-@@ -2893,6 +2896,7 @@ export type SessionCreateInput = {
+@@ -2905,6 +2908,7 @@ export type SessionCreateInput = {
      readonly id?: string | null
      readonly title?: string | null
      readonly agent?: string | null
@@ -138,7 +138,7 @@ index afa029e043ee72597287b7aebb04b7819dda5fbe..63812dedba593f33ec66194d60f832a0
      readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
      readonly location?: { readonly directory: string } | null
      readonly metadata?: { readonly [x: string]: JsonValue } | null
-@@ -2902,10 +2906,25 @@ export type SessionCreateInput = {
+@@ -2914,10 +2918,25 @@ export type SessionCreateInput = {
        readonly effect: "allow" | "deny" | "ask"
      }> | null
    }["agent"]
@@ -164,7 +164,7 @@ index afa029e043ee72597287b7aebb04b7819dda5fbe..63812dedba593f33ec66194d60f832a0
      readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
      readonly location?: { readonly directory: string } | null
      readonly metadata?: { readonly [x: string]: JsonValue } | null
-@@ -2919,6 +2938,7 @@ export type SessionCreateInput = {
+@@ -2931,6 +2950,7 @@ export type SessionCreateInput = {
      readonly id?: string | null
      readonly title?: string | null
      readonly agent?: string | null
@@ -172,7 +172,7 @@ index afa029e043ee72597287b7aebb04b7819dda5fbe..63812dedba593f33ec66194d60f832a0
      readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
      readonly location?: { readonly directory: string } | null
      readonly metadata?: { readonly [x: string]: JsonValue } | null
-@@ -2932,6 +2952,7 @@ export type SessionCreateInput = {
+@@ -2944,6 +2964,7 @@ export type SessionCreateInput = {
      readonly id?: string | null
      readonly title?: string | null
      readonly agent?: string | null
@@ -180,7 +180,7 @@ index afa029e043ee72597287b7aebb04b7819dda5fbe..63812dedba593f33ec66194d60f832a0
      readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
      readonly location?: { readonly directory: string } | null
      readonly metadata?: { readonly [x: string]: JsonValue } | null
-@@ -2945,6 +2966,7 @@ export type SessionCreateInput = {
+@@ -2957,6 +2978,7 @@ export type SessionCreateInput = {
      readonly id?: string | null
      readonly title?: string | null
      readonly agent?: string | null
@@ -188,7 +188,7 @@ index afa029e043ee72597287b7aebb04b7819dda5fbe..63812dedba593f33ec66194d60f832a0
      readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
      readonly location?: { readonly directory: string } | null
      readonly metadata?: { readonly [x: string]: JsonValue } | null
-@@ -3948,7 +3970,8 @@ export type SessionRemoveOutput = void
+@@ -3960,7 +3982,8 @@ export type SessionRemoveOutput = void
  
  export type SessionForkInput = {
    readonly sessionID: { readonly sessionID: string }["sessionID"]

@@ -15,7 +15,7 @@ and Agent are submenus. Agent and Effort only appear when there is a choice.
 Ocelot-Patch: web/composer-one-line
 
 diff --git a/packages/app/src/composer/composer.tsx b/packages/app/src/composer/composer.tsx
-index 1762ace07b9c22588b62c544ca6974de90f3e0bf..faa5886f4094239d19322ce08181a21f0608fec1 100644
+index 5b648e5300b6cc101149d845b6d28b5aad3d92f3..f2852b674a4013b628aca48f2b4351ac13df19f3 100644
 --- a/packages/app/src/composer/composer.tsx
 +++ b/packages/app/src/composer/composer.tsx
 @@ -1,12 +1,5 @@
@@ -31,7 +31,7 @@ index 1762ace07b9c22588b62c544ca6974de90f3e0bf..faa5886f4094239d19322ce08181a21f
  import { DialogSelectModelUnpaid } from "@/providers/models/unpaid"
  import { formatKeybind, useCommand } from "@/shell/commands/command"
  import { useLanguage } from "@/runtime/i18n/language"
-@@ -34,101 +27,18 @@ export function Composer(props: {
+@@ -36,101 +29,18 @@ export function Composer(props: {
          alternateKeybind={[formatKeybind("mod", language.t), "↵"]}
          exitShellKeybind={[formatKeybind("esc", language.t)]}
          suggestionBoundary={props.suggestionBoundary}

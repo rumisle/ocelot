@@ -9,7 +9,6 @@ core/first-output-time.patch
 web/turn-stats.patch
 web/working-timer.patch
 core/child-sessions.patch
-web/password-prompt.patch
 core/codemode-child-sessions.patch
 web/child-session-cards.patch
 core/session-notices.patch
