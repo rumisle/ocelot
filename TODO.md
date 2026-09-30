@@ -102,6 +102,11 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 - [x] Password prompt in the app. Dropped `web/password-prompt` in 2.0.19: upstream now sends the
       Basic challenge only to page loads (#50970) and shows a sign-in screen with address, password,
       one-time link (`ocelot pair`) and QR scan when the server rejects the app (#50972).
+- [x] Links the app opens on its server (a file under /api/fs/read) no longer ask for the password:
+      patch `server/session-cookie` gives the app's authenticated same-origin requests upstream's
+      session cookie (HttpOnly, SameSite=Lax, 30 days).
+- [x] Download files from the file view: patch `web/file-download` ("Download" in the artifact
+      toolbar, an icon on plain text files). Not checked on the phone layout yet.
 
 ### Plugin UI in the web app
 - [ ] General way for plugins to add UI to the web app (upstream only has TUI plugin slots).

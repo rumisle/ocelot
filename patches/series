@@ -20,3 +20,5 @@ tui/message-branches.patch
 core/refusal-reason.patch
 web/page-title.patch
 cli/restart-when-idle.patch
+server/session-cookie.patch
+web/file-download.patch

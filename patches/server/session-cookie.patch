@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Wed, 30 Sep 2026 17:07:31 +0800
+Subject: server/auth: give the web app's authenticated requests the session
+ cookie
+
+The web app sends the password (or a pairing token) in a header, which a page load can't do, so
+every link it opens on the server (a file under /api/fs/read, a download) got the Basic challenge.
+Same-origin requests that pass with credentials but carry no valid session cookie now also get the
+cookie that pairing links set (same name, HttpOnly, SameSite=Lax, 30 days, signed with the
+password), so those page loads are signed in too. Cross-site requests and API clients get none.
+
+Ocelot-Patch: server/session-cookie
+
+diff --git a/packages/server/src/middleware/authorization.ts b/packages/server/src/middleware/authorization.ts
+index 84906429d776a0c1062e78cee58fd5ea0d84e330..94de16a5c3305b2e45c325be42a278351450258c 100644
+--- a/packages/server/src/middleware/authorization.ts
++++ b/packages/server/src/middleware/authorization.ts
+@@ -5,7 +5,7 @@ export { Authorization } from "@opencode/protocol/middleware/authorization"
+ import { hasPtyConnectTicketURL } from "@opencode/protocol/groups/pty"
+ import { hasPersistentPtyConnectTicketURL } from "@opencode/protocol/groups/persistent-pty"
+ import { isPairingConnectURL } from "@opencode/protocol/groups/server"
+-import { Effect, Encoding, Layer, Redacted } from "effect"
++import { Duration, Effect, Encoding, Layer, Redacted } from "effect"
+ import { HttpEffect, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+ 
+ const AUTH_TOKEN_QUERY = "auth_token"
+@@ -69,6 +69,13 @@ function authorizedSessionCookie(request: HttpServerRequest.HttpServerRequest, c
+   return ServerAuth.verifySession(token, config)
+ }
+ 
++// ocelot: the web app authenticates with a header, which page loads can't send, so links it opens
++// (a file under /api/fs/read, a download) asked for the password. Its own requests that pass with
++// the password or a pairing token also get the session cookie a pairing link sets, so those work.
++function needsSessionCookie(request: HttpServerRequest.HttpServerRequest, config: ServerAuth.Info) {
++  return request.headers["sec-fetch-site"] === "same-origin" && !authorizedSessionCookie(request, config)
++}
++
+ export const authorizationLayer = Layer.effect(
+   Authorization,
+   Effect.gen(function* () {
+@@ -82,7 +89,23 @@ export const authorizationLayer = Layer.effect(
+         const url = new URL(request.url, "http://localhost")
+         if (hasPtyConnectTicketURL(url) || hasPersistentPtyConnectTicketURL(url) || isPairingConnectURL(url))
+           return yield* effect
+-        if (yield* authorizedRequest(request, config)) return yield* effect
++        if (yield* authorizedRequest(request, config)) {
++          if (needsSessionCookie(request, config)) {
++            const token = ServerAuth.issueSession(config)
++            if (token !== undefined)
++              yield* HttpEffect.appendPreResponseHandler((_request, response) =>
++                Effect.succeed(
++                  HttpServerResponse.setCookieUnsafe(response, ServerAuth.sessionCookieName(request.headers.host), token, {
++                    path: "/",
++                    httpOnly: true,
++                    sameSite: "lax",
++                    maxAge: Duration.seconds(ServerAuth.SESSION_TTL_SECONDS),
++                  }),
++                ),
++              )
++          }
++          return yield* effect
++        }
+         if (challengeRequest(request))
+           yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+             Effect.succeed(HttpServerResponse.setHeader(response, "www-authenticate", WWW_AUTHENTICATE)),
+diff --git a/packages/server/test/process.test.ts b/packages/server/test/process.test.ts
+index f5d4071a73b88b649fd5b3fdf784ae35983c2a9f..a2b8099dd3fc2e6e17565eb6a104f7a4add7556d 100644
+--- a/packages/server/test/process.test.ts
++++ b/packages/server/test/process.test.ts
+@@ -229,6 +229,43 @@ it.live("pairing links sign in browsers with a cookie and API clients with a tok
+   }),
+ )
+ 
++it.live("the web app's own authenticated requests get the session cookie, so links it opens work", () =>
++  Effect.gen(function* () {
++    const server = yield* ServerProcess.start<never, never>({
++      hostname: "127.0.0.1",
++      port: 0,
++      password: "secret",
++      app: { version: "test-version" },
++      database: { path: ":memory:" },
++    })
++    const base = HttpServer.formatAddress(server.address)
++    const request = (headers: Record<string, string>) =>
++      Effect.promise(() => fetch(new URL("/api/session/active", base), { redirect: "manual", headers }))
++    const basic = `Basic ${btoa("opencode:secret")}`
++
++    // A page load (a file link) without the header is challenged.
++    expect((yield* request({ "sec-fetch-mode": "navigate" })).status).toBe(401)
++
++    const app = yield* request({ authorization: basic, "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors" })
++    expect(app.status).toBe(200)
++    const setCookie = app.headers.get("set-cookie") ?? ""
++    expect(setCookie).toContain(`opencode_session_${new URL(base).port}=`)
++    expect(setCookie).toContain("HttpOnly")
++    expect(setCookie).toContain("SameSite=Lax")
++    const cookie = setCookie.split(";")[0]!
++    expect((yield* request({ cookie, "sec-fetch-mode": "navigate" })).status).toBe(200)
++
++    // Only while the cookie is missing or invalid, only for same-origin pages, never for bad credentials.
++    const again = yield* request({ authorization: basic, cookie, "sec-fetch-site": "same-origin" })
++    expect(again.headers.get("set-cookie")).toBeNull()
++    expect((yield* request({ authorization: basic, "sec-fetch-site": "cross-site" })).headers.get("set-cookie")).toBeNull()
++    expect((yield* request({ authorization: basic })).headers.get("set-cookie")).toBeNull()
++    const wrong = yield* request({ authorization: `Basic ${btoa("opencode:nope")}`, "sec-fetch-site": "same-origin" })
++    expect(wrong.status).toBe(401)
++    expect(wrong.headers.get("set-cookie")).toBeNull()
++  }),
++)
++
+ async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string) {
+   while (true) {
+     const next = await reader.read()
