@@ -13,7 +13,7 @@ Plugin notices (patch core/session-notices) render like the other timeline notic
 Ocelot-Patch: web/session-notices
 
 diff --git a/packages/session-ui/src/timeline/projection.ts b/packages/session-ui/src/timeline/projection.ts
-index effcaa9ba..9f899944e 100644
+index effcaa9ba2f6f413e464f2dca96c1358904b2e36..9f899944eceb20da966d4271b50b0cc5bf674385 100644
 --- a/packages/session-ui/src/timeline/projection.ts
 +++ b/packages/session-ui/src/timeline/projection.ts
 @@ -271,7 +271,13 @@ export namespace Timeline {
@@ -32,7 +32,7 @@ index effcaa9ba..9f899944e 100644
              ),
            )
 diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
-index 684d65cbd..36dd5c388 100644
+index 684d65cbd49254fa88199a1db764ddd5f9eb00ff..36dd5c38882168dee5d6cc54b4177bd745e91f5c 100644
 --- a/packages/session-ui/src/timeline/session-timeline-row.tsx
 +++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
 @@ -343,6 +343,11 @@ export function createSessionTimelineRowRenderer(input: {

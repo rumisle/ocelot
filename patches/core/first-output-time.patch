@@ -12,7 +12,7 @@ the client's generated types are regenerated (packages/client: bun run generate)
 Ocelot-Patch: core/first-output-time
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index b86373a5e..c44dc0730 100644
+index b86373a5e5e1d838d91e79641f2ff961851d447a..c44dc073089a4bd4a9225efb9968befe5c12e82b 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
 @@ -847,7 +847,11 @@ export type SessionLogOutput =
@@ -29,7 +29,7 @@ index b86373a5e..c44dc0730 100644
        | {
            readonly id: Event.ID
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index a7d41240f..afa029e04 100644
+index a7d41240fb1434586680e92b2bf7efd1b2106123..afa029e043ee72597287b7aebb04b7819dda5fbe 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
 @@ -732,7 +732,7 @@ export type SessionStepStreamed = {
@@ -93,7 +93,7 @@ index a7d41240f..afa029e04 100644
            readonly agent: string
            readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
 diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
-index 4a1666f88..99ac059fc 100644
+index 4a1666f88b7b22a3e031edf2918c2a52651e6fee..99ac059fc3354bf81c54034fba32f4f23db4cef3 100644
 --- a/packages/client/src/solid/data.ts
 +++ b/packages/client/src/solid/data.ts
 @@ -849,6 +849,7 @@ export function createData(config: CreateDataInput) {
@@ -113,7 +113,7 @@ index 4a1666f88..99ac059fc 100644
          return
        case "session.step.ended": {
 diff --git a/packages/core/src/session/message-updater.ts b/packages/core/src/session/message-updater.ts
-index 6d2a40e41..e39c659e2 100644
+index 6d2a40e4195a30707cd5397bf8a422a50bb40936..e39c659e2cafa2990cd8ee62c140bff20f995d96 100644
 --- a/packages/core/src/session/message-updater.ts
 +++ b/packages/core/src/session/message-updater.ts
 @@ -226,6 +226,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
@@ -133,7 +133,7 @@ index 6d2a40e41..e39c659e2 100644
        },
        "session.step.ended": (event) => {
 diff --git a/packages/core/src/session/runner/publish-llm-event.ts b/packages/core/src/session/runner/publish-llm-event.ts
-index 834a023a1..ffb9baa14 100644
+index 834a023a1935417933a35b86badb4254cde6d711..ffb9baa14d63366a124fd84f9cec00a64ba86d97 100644
 --- a/packages/core/src/session/runner/publish-llm-event.ts
 +++ b/packages/core/src/session/runner/publish-llm-event.ts
 @@ -93,6 +93,8 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
@@ -166,7 +166,7 @@ index 834a023a1..ffb9baa14 100644
        case "step-start":
          yield* startAssistant()
 diff --git a/packages/schema/src/session-event.ts b/packages/schema/src/session-event.ts
-index bfd430f3c..79be9aaf4 100644
+index bfd430f3c98fd92a2bf67591a1efb678aeb7606e..79be9aaf491b9c2483a3d6cf4874aec8d3b1d6ec 100644
 --- a/packages/schema/src/session-event.ts
 +++ b/packages/schema/src/session-event.ts
 @@ -351,6 +351,8 @@ export namespace Step {
@@ -179,7 +179,7 @@ index bfd430f3c..79be9aaf4 100644
    })
    export type Streamed = typeof Streamed.Type
 diff --git a/packages/schema/src/session-message.ts b/packages/schema/src/session-message.ts
-index 55ef74558..c83442bc5 100644
+index 55ef745584dd9d59a1764bc3a6251f040d8a18fb..c83442bc50f3794393a281852229eb5b729c2834 100644
 --- a/packages/schema/src/session-message.ts
 +++ b/packages/schema/src/session-message.ts
 @@ -229,6 +229,8 @@ export const Assistant = Schema.Struct({

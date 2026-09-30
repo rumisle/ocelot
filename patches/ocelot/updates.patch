@@ -15,7 +15,7 @@ false) then work as they do in OpenCode.
 Ocelot-Patch: ocelot/updates
 
 diff --git a/packages/cli/src/services/updater.ts b/packages/cli/src/services/updater.ts
-index 20828386c..7768f6321 100644
+index 20828386c51fba67f4deca4ef80c40ea360fa1ba..7768f6321a4577d28a00a704e8af4138f639d67b 100644
 --- a/packages/cli/src/services/updater.ts
 +++ b/packages/cli/src/services/updater.ts
 @@ -10,6 +10,10 @@ import { RetainedImage } from "./retained-image"

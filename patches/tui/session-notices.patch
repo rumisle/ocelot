@@ -9,7 +9,7 @@ warning color, and live updates append them.
 Ocelot-Patch: tui/session-notices
 
 diff --git a/packages/tui/src/routes/session/index.tsx b/packages/tui/src/routes/session/index.tsx
-index 50970ddbb..94111c6c8 100644
+index 50970ddbb919e060c33256b3f14f88e4bd51db90..94111c6c84a574fd5ab2d23401a0d8717bb5ddcf 100644
 --- a/packages/tui/src/routes/session/index.tsx
 +++ b/packages/tui/src/routes/session/index.tsx
 @@ -1766,7 +1766,12 @@ function SessionMessageView(props: { message: SessionMessageInfo }) {
@@ -53,7 +53,7 @@ index 50970ddbb..94111c6c8 100644
          </InlineToolRow>
        }
 diff --git a/packages/tui/src/routes/session/rows.ts b/packages/tui/src/routes/session/rows.ts
-index e6d81781d..14f54169e 100644
+index e6d81781d9dd73966fc6eb5cf149a27726d1abc2..14f54169e56ee761dbe68e953693b56f550aaf3b 100644
 --- a/packages/tui/src/routes/session/rows.ts
 +++ b/packages/tui/src/routes/session/rows.ts
 @@ -251,6 +251,10 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi

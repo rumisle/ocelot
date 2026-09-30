@@ -17,7 +17,7 @@ the dollars and no digit right after the closing one ($5 and $10, $5-$6).
 Ocelot-Patch: web/math-delimiters
 
 diff --git a/packages/ui/src/context/marked-base.tsx b/packages/ui/src/context/marked-base.tsx
-index dbb857dc1..6880646b1 100644
+index dbb857dc1fe91ca75348e46aa66e90c09bd0f145..6880646b1aaa1db058c83895ae944a92e577fc29 100644
 --- a/packages/ui/src/context/marked-base.tsx
 +++ b/packages/ui/src/context/marked-base.tsx
 @@ -15,7 +15,7 @@ let smallParser: Marked | undefined
@@ -30,7 +30,7 @@ index dbb857dc1..6880646b1 100644
    // Keep every possible Markdown construct, autolink, and hard break on that lexer.
    if (
 diff --git a/packages/ui/src/context/marked-parser.test.ts b/packages/ui/src/context/marked-parser.test.ts
-index a5aa8003f..3a0322a7b 100644
+index a5aa8003fd096208cec99821a41a21cc74fe835f..3a0322a7b8ffde42bb069563e22e144d3397340d 100644
 --- a/packages/ui/src/context/marked-parser.test.ts
 +++ b/packages/ui/src/context/marked-parser.test.ts
 @@ -15,6 +15,23 @@ test("renders inline and block math", async () => {
@@ -58,7 +58,7 @@ index a5aa8003f..3a0322a7b 100644
    expect(await parser.parse("```ts\nconst value = 1\n```\n")).toBe('<pre data-language="ts">const value = 1</pre>\n')
  })
 diff --git a/packages/ui/src/context/marked-parser.tsx b/packages/ui/src/context/marked-parser.tsx
-index e058559ea..5adeca86a 100644
+index e058559ea6baad39ab7c33bae72f7d812b710099..5adeca86acb97279689b9c28250f8f4f27fe5ed6 100644
 --- a/packages/ui/src/context/marked-parser.tsx
 +++ b/packages/ui/src/context/marked-parser.tsx
 @@ -7,8 +7,17 @@ export function createMarkdownParser(highlight: (code: string, language: string)

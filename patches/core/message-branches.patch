@@ -27,7 +27,7 @@ messages when a branch is switched elsewhere.
 Ocelot-Patch: core/message-branches
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index dd3c6929c..8c12bccc9 100644
+index dd3c6929c39894a46d883bc9ad6953130762a70a..8c12bccc96c61a17210752a496f3eda3ea876a05 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
 @@ -371,6 +371,26 @@ export type SessionRevertCommitOperation<E = never> = (
@@ -87,7 +87,7 @@ index dd3c6929c..8c12bccc9 100644
    readonly diff: SessionDiffOperation<E>
    readonly inbox: {
 diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
-index 95afdbd67..563920ff9 100644
+index 95afdbd67ee9c77fa3d24fa3a8ede03c21b4267f..563920ff94ba4e6b3d5d85000248f44e7bb695a4 100644
 --- a/packages/client/src/effect/generated/client.ts
 +++ b/packages/client/src/effect/generated/client.ts
 @@ -66,6 +66,10 @@ import type {
@@ -136,7 +136,7 @@ index 95afdbd67..563920ff9 100644
    diff: EndpointSessionDiff(raw),
    inbox: {
 diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
-index eb77a2aeb..c155f9410 100644
+index eb77a2aeb020d53dca80dcef6766eb931cada457..c155f9410144cd8cdffb46836a4157f84c8d48f8 100644
 --- a/packages/client/src/promise/generated/client.ts
 +++ b/packages/client/src/promise/generated/client.ts
 @@ -60,6 +60,10 @@ import type {
@@ -183,7 +183,7 @@ index eb77a2aeb..c155f9410 100644
          request<{ readonly data: SessionContextOutput }>(
            {
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index 2e35667de..eae113613 100644
+index 2e35667ded490efc4a9eaa634fa3748545d9b7df..eae113613555efb7ac2e5caf639f12fa7b96e033 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
 @@ -849,6 +849,16 @@ export type SessionRevertCommitted = {
@@ -244,7 +244,7 @@ index 2e35667de..eae113613 100644
  
  export type SessionContextOutput = { data: Array<SessionMessageInfo> }["data"]
 diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
-index f1f6b256d..f8cb4254d 100644
+index f1f6b256d287d8d7a8bfbbced80f4c30d860eb48..f8cb4254dda235d58a628110ff98b99aef5127f2 100644
 --- a/packages/client/src/solid/data.ts
 +++ b/packages/client/src/solid/data.ts
 @@ -31,6 +31,7 @@ import type {
@@ -331,7 +331,7 @@ index f1f6b256d..f8cb4254d 100644
          list(sessionID: string) {
            return store.session.pending[sessionID] ?? []
 diff --git a/packages/core/src/session.ts b/packages/core/src/session.ts
-index c2c2fd73d..09e8e24a5 100644
+index c2c2fd73db4c14b8338701c29bf3b3cfe19a200f..09e8e24a52dfa86359bb03cef5d62a1dbe250f7f 100644
 --- a/packages/core/src/session.ts
 +++ b/packages/core/src/session.ts
 @@ -229,6 +229,11 @@ export interface Interface {
@@ -359,7 +359,7 @@ index c2c2fd73d..09e8e24a5 100644
      return result
 diff --git a/packages/core/src/session/branch.ts b/packages/core/src/session/branch.ts
 new file mode 100644
-index 000000000..812e83dbb
+index 0000000000000000000000000000000000000000..812e83dbb21afa78df986b5176d149cb0e71afa1
 --- /dev/null
 +++ b/packages/core/src/session/branch.ts
 @@ -0,0 +1,223 @@
@@ -587,7 +587,7 @@ index 000000000..812e83dbb
 +  return result.sort((a, b) => a.seq - b.seq).map(({ seq: _, ...point }): Point => point)
 +})
 diff --git a/packages/core/src/session/message-updater.ts b/packages/core/src/session/message-updater.ts
-index d0a084f87..ac7348ad0 100644
+index d0a084f8729864a45da8b4454eada58dd42a415e..ac7348ad03452621d3179592b8b16bf58bacf347 100644
 --- a/packages/core/src/session/message-updater.ts
 +++ b/packages/core/src/session/message-updater.ts
 @@ -499,6 +499,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
@@ -599,7 +599,7 @@ index d0a084f87..ac7348ad0 100644
    )
    return project(event)
 diff --git a/packages/core/src/session/projector.ts b/packages/core/src/session/projector.ts
-index 665c6d0c9..5ab4bbd3d 100644
+index 665c6d0c9cd70118828a68836b6f2158f584157c..5ab4bbd3df39f25e02d1a679c826e43079c5c8a0 100644
 --- a/packages/core/src/session/projector.ts
 +++ b/packages/core/src/session/projector.ts
 @@ -14,6 +14,7 @@ import { SessionMessageUpdater } from "./message-updater.js"
@@ -640,7 +640,7 @@ index 665c6d0c9..5ab4bbd3d 100644
        Stream.runForEach((event) => {
          if (
 diff --git a/packages/core/src/session/revert.ts b/packages/core/src/session/revert.ts
-index aaf8405ef..75ceae925 100644
+index aaf8405ef57b261930f8cff9760ae86793da728e..75ceae9250508d94356fb0f0a9d7b53ca80f8a7d 100644
 --- a/packages/core/src/session/revert.ts
 +++ b/packages/core/src/session/revert.ts
 @@ -31,17 +31,23 @@ export const stage = Effect.fn("SessionRevert.stage")(function* (input: {
@@ -671,7 +671,7 @@ index aaf8405ef..75ceae925 100644
        ? yield* snapshot.diff({ from: original, to: (yield* snapshot.capture()) ?? original, paths })
        : []
 diff --git a/packages/core/src/session/session.ts b/packages/core/src/session/session.ts
-index 9aab9912e..3eaadc4b1 100644
+index 9aab9912e29481709a8feb4487b8e761190b1ab5..3eaadc4b17a290007587992b36031e9248f26c67 100644
 --- a/packages/core/src/session/session.ts
 +++ b/packages/core/src/session/session.ts
 @@ -26,6 +26,7 @@ import { SessionInbox } from "./inbox.js"
@@ -739,7 +739,7 @@ index 9aab9912e..3eaadc4b1 100644
    }
    return { forSession }
 diff --git a/packages/core/test/session-owned.test.ts b/packages/core/test/session-owned.test.ts
-index 327071b56..00e380161 100644
+index 327071b56771600d26c84e005d6654b883dc31c4..00e3801616ff6b2c4e6b3c57f99d069bb7d7b617 100644
 --- a/packages/core/test/session-owned.test.ts
 +++ b/packages/core/test/session-owned.test.ts
 @@ -732,7 +732,8 @@ describe("Session-owned handles", () => {
@@ -783,7 +783,7 @@ index 327071b56..00e380161 100644
    )
  })
 diff --git a/packages/core/test/session-revert.test.ts b/packages/core/test/session-revert.test.ts
-index bc3906857..6638afb5d 100644
+index bc3906857760aabf417b6e663482a9ec360e5439..6638afb5df309c87bdcc27c7c2a7ad573ffa6807 100644
 --- a/packages/core/test/session-revert.test.ts
 +++ b/packages/core/test/session-revert.test.ts
 @@ -3,6 +3,7 @@ import { describe, expect } from "bun:test"
@@ -943,7 +943,7 @@ index bc3906857..6638afb5d 100644
 +  )
 +})
 diff --git a/packages/protocol/openapi.json b/packages/protocol/openapi.json
-index 486de02f3..788b59060 100644
+index 486de02f311812d27f8981892551b1ab489a4f45..788b59060c3fc62bf77feceab6ca91551a76cbe5 100644
 --- a/packages/protocol/openapi.json
 +++ b/packages/protocol/openapi.json
 @@ -3197,6 +3197,248 @@
@@ -1196,7 +1196,7 @@ index 486de02f3..788b59060 100644
        "get": {
          "tags": ["session"],
 diff --git a/packages/protocol/src/groups/session.ts b/packages/protocol/src/groups/session.ts
-index 1fc15544b..a5d112d0f 100644
+index 1fc15544b53b45672d5adb9e70b996aebdbced03..a5d112d0fcab4ea98f8cd5bed68ece0de3d37fc2 100644
 --- a/packages/protocol/src/groups/session.ts
 +++ b/packages/protocol/src/groups/session.ts
 @@ -593,6 +593,50 @@ export const makeSessionGroup = <
@@ -1251,7 +1251,7 @@ index 1fc15544b..a5d112d0f 100644
        HttpApiEndpoint.get("session.context", "/api/session/:sessionID/context", {
          params: { sessionID: Session.ID },
 diff --git a/packages/schema/src/session-event.ts b/packages/schema/src/session-event.ts
-index 1733b2892..bbba8a85e 100644
+index 1733b28924a1c90e6971cb5858d1a62a4c36e4b9..bbba8a85e93567045e57ee0fc0c598de8c1b95f5 100644
 --- a/packages/schema/src/session-event.ts
 +++ b/packages/schema/src/session-event.ts
 @@ -675,6 +675,18 @@ export namespace RevertEvent {
@@ -1282,7 +1282,7 @@ index 1733b2892..bbba8a85e 100644
  
  // Internal and replay-only events are excluded from the public manifest.
 diff --git a/packages/server/src/handlers/session.ts b/packages/server/src/handlers/session.ts
-index 0d7ed39a4..a929ac447 100644
+index 0d7ed39a40a8f098351b75001594b4cf36a613bd..a929ac44709290f9fa2c0119992eb1407f2cf754 100644
 --- a/packages/server/src/handlers/session.ts
 +++ b/packages/server/src/handlers/session.ts
 @@ -513,6 +513,30 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl

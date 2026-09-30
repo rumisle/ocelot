@@ -19,7 +19,7 @@ its progress is `<registration>.restart`, shown by `ocelot service status`.
 Ocelot-Patch: cli/restart-when-idle
 
 diff --git a/packages/cli/src/commands/commands.ts b/packages/cli/src/commands/commands.ts
-index 682953ae9..435d521d4 100644
+index 682953ae97a48c12350bbe1547849c743534b23a..435d521d4dbf3f15d47cb9db3771916c5c475113 100644
 --- a/packages/cli/src/commands/commands.ts
 +++ b/packages/cli/src/commands/commands.ts
 @@ -450,7 +450,16 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
@@ -41,7 +41,7 @@ index 682953ae9..435d521d4 100644
          Spec.make("stop", { description: "Stop the background server" }),
          Spec.make("get", {
 diff --git a/packages/cli/src/commands/handlers/service/restart.ts b/packages/cli/src/commands/handlers/service/restart.ts
-index afc7bb457..127c154fb 100644
+index afc7bb457c177955935ecd80dabd1bddcba34117..127c154fbc4b1332630258e1047dc3475d8faa42 100644
 --- a/packages/cli/src/commands/handlers/service/restart.ts
 +++ b/packages/cli/src/commands/handlers/service/restart.ts
 @@ -3,13 +3,19 @@ import { Effect } from "effect"
@@ -66,7 +66,7 @@ index afc7bb457..127c154fb 100644
      yield* ServerConnection.shutdownPersistentPty(options).pipe(Effect.ignore)
      yield* Service.stop(options)
 diff --git a/packages/cli/src/commands/handlers/service/status.ts b/packages/cli/src/commands/handlers/service/status.ts
-index ade0a3919..5ee14b8c7 100644
+index ade0a391993d5fa3da34b5398e08fc49cff29476..5ee14b8c78adb6444e4fdbf42d07f71f46e663df 100644
 --- a/packages/cli/src/commands/handlers/service/status.ts
 +++ b/packages/cli/src/commands/handlers/service/status.ts
 @@ -3,6 +3,7 @@ import { Effect } from "effect"
@@ -92,7 +92,7 @@ index ade0a3919..5ee14b8c7 100644
    }),
  )
 diff --git a/packages/cli/src/server-process.ts b/packages/cli/src/server-process.ts
-index cce3a2c53..7712161d8 100644
+index cce3a2c53b9969f49ea9b5276342fc436f5571c0..7712161d8631118a0bad860a83f3ec50956984da 100644
 --- a/packages/cli/src/server-process.ts
 +++ b/packages/cli/src/server-process.ts
 @@ -15,6 +15,7 @@ import { ServiceConfig } from "./services/service-config"
@@ -113,7 +113,7 @@ index cce3a2c53..7712161d8 100644
          : options.mode === "stdio"
 diff --git a/packages/cli/src/services/idle-restart.ts b/packages/cli/src/services/idle-restart.ts
 new file mode 100644
-index 000000000..1f487e230
+index 0000000000000000000000000000000000000000..1f487e2300fae66f505d15f9ab162ea1055deeda
 --- /dev/null
 +++ b/packages/cli/src/services/idle-restart.ts
 @@ -0,0 +1,145 @@
@@ -263,7 +263,7 @@ index 000000000..1f487e230
 +  }
 +}
 diff --git a/packages/cli/src/services/server-connection.ts b/packages/cli/src/services/server-connection.ts
-index 5d2619ad4..000c41fd5 100644
+index 5d2619ad424324afb63f2e1c6469f7478a57b462..000c41fd5bfad3716a861d694611ad97c346bf77 100644
 --- a/packages/cli/src/services/server-connection.ts
 +++ b/packages/cli/src/services/server-connection.ts
 @@ -5,6 +5,7 @@ import { Effect, Redacted } from "effect"
@@ -289,7 +289,7 @@ index 5d2619ad4..000c41fd5 100644
  
    const compatible = yield* Service.discover(options)
 diff --git a/packages/cli/src/services/service-config.ts b/packages/cli/src/services/service-config.ts
-index d857efa91..a01a7f17d 100644
+index d857efa919c658d18f1118eed47c33c5fc725197..a01a7f17d3743035236751696750b667ce913a74 100644
 --- a/packages/cli/src/services/service-config.ts
 +++ b/packages/cli/src/services/service-config.ts
 @@ -17,10 +17,12 @@ export const Info = Schema.Struct({

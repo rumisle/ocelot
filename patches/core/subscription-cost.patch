@@ -10,7 +10,7 @@ Claude plan: the cost then shows what the same usage would cost on the API.
 Ocelot-Patch: core/subscription-cost
 
 diff --git a/packages/core/src/plugin/provider/openai.ts b/packages/core/src/plugin/provider/openai.ts
-index 255cbb2cf..a23cb99a8 100644
+index 255cbb2cfcc42e2fe56349c53901727df97c0852..a23cb99a86eb94a6a7d9a1cf21a30870c6c61056 100644
 --- a/packages/core/src/plugin/provider/openai.ts
 +++ b/packages/core/src/plugin/provider/openai.ts
 @@ -270,8 +270,7 @@ export const OpenAIPlugin = define({
@@ -32,7 +32,7 @@ index 255cbb2cf..a23cb99a8 100644
            draft.limit = { ...draft.limit, context: 400_000, input: 272_000 }
          })
 diff --git a/packages/core/test/plugin/provider-openai.test.ts b/packages/core/test/plugin/provider-openai.test.ts
-index 2f6725f3c..82f528dc0 100644
+index 2f6725f3cf2fe92fe8dcbef94352185aecb97cc4..82f528dc0bb2c1892762cf3e471c960152a632ea 100644
 --- a/packages/core/test/plugin/provider-openai.test.ts
 +++ b/packages/core/test/plugin/provider-openai.test.ts
 @@ -159,7 +159,8 @@ describe("OpenAIPlugin", () => {

@@ -13,7 +13,7 @@ back to "OpenCode" when you leave the session.
 Ocelot-Patch: web/page-title
 
 diff --git a/packages/app/src/session/screen.tsx b/packages/app/src/session/screen.tsx
-index 71fe3a9a2..03194d35b 100644
+index 71fe3a9a2519d3389722f93dffb3fafd4b8d8877..03194d35b1ceff1001884388db2e5759d0d5d6b9 100644
 --- a/packages/app/src/session/screen.tsx
 +++ b/packages/app/src/session/screen.tsx
 @@ -9,6 +9,7 @@ import {

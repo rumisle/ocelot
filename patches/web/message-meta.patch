@@ -13,7 +13,7 @@ the turn's duration (and "Interrupted"), not the agent and model.
 Ocelot-Patch: web/message-meta
 
 diff --git a/packages/session-ui/component-tests/session-timeline-mobile.spec.ts b/packages/session-ui/component-tests/session-timeline-mobile.spec.ts
-index 90dc100c9..4d6c7a2de 100644
+index 90dc100c984a47f88e98ecf5e29893a74c5bba35..4d6c7a2de61a1cc44879aad6bbc60981da9d6559 100644
 --- a/packages/session-ui/component-tests/session-timeline-mobile.spec.ts
 +++ b/packages/session-ui/component-tests/session-timeline-mobile.spec.ts
 @@ -18,10 +18,10 @@ story.describe("touch timeline", () => {
@@ -32,7 +32,7 @@ index 90dc100c9..4d6c7a2de 100644
  
    story("keeps shell copy visible without hover", async ({ mount }) => {
 diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
-index 74809f7d2..ee7b53c2b 100644
+index 74809f7d287a466e020d98780411e4c353346e33..ee7b53c2b4daeed32dedea8bc543eafbd5cb8825 100644
 --- a/packages/session-ui/src/message/message-content.tsx
 +++ b/packages/session-ui/src/message/message-content.tsx
 @@ -1,6 +1,5 @@

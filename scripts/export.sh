@@ -22,7 +22,7 @@ for commit in $(git rev-list --reverse "$UPSTREAM..$BRANCH"); do
   case " ${names[*]-} " in *" $name "*) die "two commits use Ocelot-Patch: $name" ;; esac
   names+=("$name")
   mkdir -p "$tmp/$(dirname "$name")"
-  git format-patch -q -1 -k --zero-commit --no-signature --no-stat --stdout "$commit" > "$tmp/$name.patch"
+  git format-patch -q -1 -k --zero-commit --no-signature --no-stat --full-index --stdout "$commit" > "$tmp/$name.patch"
 done
 
 # Replace patches/ wholesale so deleted or renamed patches disappear.

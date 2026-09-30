@@ -15,7 +15,7 @@ and Agent are submenus. Agent and Effort only appear when there is a choice.
 Ocelot-Patch: web/composer-one-line
 
 diff --git a/packages/app/src/composer/composer.tsx b/packages/app/src/composer/composer.tsx
-index 1762ace07..faa5886f4 100644
+index 1762ace07b9c22588b62c544ca6974de90f3e0bf..faa5886f4094239d19322ce08181a21f0608fec1 100644
 --- a/packages/app/src/composer/composer.tsx
 +++ b/packages/app/src/composer/composer.tsx
 @@ -1,12 +1,5 @@
@@ -145,7 +145,7 @@ index 1762ace07..faa5886f4 100644
 -  )
 -}
 diff --git a/packages/app/src/composer/editor/editor.tsx b/packages/app/src/composer/editor/editor.tsx
-index bec7da700..930a07fe2 100644
+index bec7da700e257489af8d6c7d09eb35cf346b9942..930a07fe25bd343650d89afcb2c8727b64b32a06 100644
 --- a/packages/app/src/composer/editor/editor.tsx
 +++ b/packages/app/src/composer/editor/editor.tsx
 @@ -1,15 +1,4 @@
@@ -518,7 +518,7 @@ index bec7da700..930a07fe2 100644
                {props.attachLabel}
              </Menu.Item>
 diff --git a/packages/ui/src/i18n/en.ts b/packages/ui/src/i18n/en.ts
-index f5f68b39d..8af5fbf46 100644
+index f5f68b39d19445f2ac8c9b01f28a08a7f13693ea..8af5fbf4691def691472888d0d08dabc1302c699 100644
 --- a/packages/ui/src/i18n/en.ts
 +++ b/packages/ui/src/i18n/en.ts
 @@ -154,8 +154,8 @@ const source = {

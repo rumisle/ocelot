@@ -17,7 +17,7 @@ instead of a 500. The fork flag follows the maintainer draft #51095
 Ocelot-Patch: core/child-sessions
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index c44dc0730..375ea22ec 100644
+index c44dc073089a4bd4a9225efb9968befe5c12e82b..375ea22ec5616b2028f238f890690a31c1412c6b 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
 @@ -191,6 +191,7 @@ export type SessionCreateInput = {
@@ -50,7 +50,7 @@ index c44dc0730..375ea22ec 100644
                | { readonly [x: string & Brand.Brand<"Instruction.Key">]: string & Brand.Brand<"Instruction.Hash"> }
                | undefined
 diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
-index 4e1499c32..3450f794f 100644
+index 4e1499c324c16d8618a54e95a5c006b8118ea598..3450f794ffcea7c46311a5e026f0c3544b7a3419 100644
 --- a/packages/client/src/effect/generated/client.ts
 +++ b/packages/client/src/effect/generated/client.ts
 @@ -377,6 +377,7 @@ const EndpointSessionCreate = (raw: RawClient["server.session"]) => (input?: Ses
@@ -74,7 +74,7 @@ index 4e1499c32..3450f794f 100644
        Effect.map((value) => value.data),
      ),
 diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
-index 79cf0da92..97e215583 100644
+index 79cf0da92bfa55d0a517fb4c97b73ff885febfe3..97e215583b05b48b409a55af4fd8c89e076991dd 100644
 --- a/packages/client/src/promise/generated/client.ts
 +++ b/packages/client/src/promise/generated/client.ts
 @@ -557,13 +557,14 @@ export function make(options: ClientOptions) {
@@ -103,7 +103,7 @@ index 79cf0da92..97e215583 100644
              declaredStatuses: [400, 401, 404],
              empty: false,
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index afa029e04..63812dedb 100644
+index afa029e043ee72597287b7aebb04b7819dda5fbe..63812dedba593f33ec66194d60f832a067a3f972 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
 @@ -1811,6 +1811,7 @@ export type SessionForked = {
@@ -199,7 +199,7 @@ index afa029e04..63812dedb 100644
  
  export type SessionForkOutput = { data: SessionInfo }["data"]
 diff --git a/packages/core/src/plugin/host.ts b/packages/core/src/plugin/host.ts
-index a2aee2865..dd4bd996e 100644
+index a2aee2865ea2a7b4940a4bfb29df05fb5d4b5918..dd4bd996e10bffcb7b83328378565dc156164927 100644
 --- a/packages/core/src/plugin/host.ts
 +++ b/packages/core/src/plugin/host.ts
 @@ -525,8 +525,13 @@ export const make = Effect.fn("PluginHost.make")(function* (
@@ -219,7 +219,7 @@ index a2aee2865..dd4bd996e 100644
        get: (input) => sessions.get(input.sessionID),
        switchAgent: sessions.switchAgent,
 diff --git a/packages/core/src/session.ts b/packages/core/src/session.ts
-index 253661d08..90e9fc474 100644
+index 253661d087ea3e899820e8897fab1f4b5f27fb5c..90e9fc474ac988667024fecb01bbeb8e05f1c036 100644
 --- a/packages/core/src/session.ts
 +++ b/packages/core/src/session.ts
 @@ -87,14 +87,17 @@ type CreateBaseInput = {
@@ -259,7 +259,7 @@ index 253661d08..90e9fc474 100644
          })
          return yield* result.get(sessionID).pipe(Effect.orDie)
 diff --git a/packages/core/src/session/projector.ts b/packages/core/src/session/projector.ts
-index f3b5ec439..f49ddb473 100644
+index f3b5ec439906063b1472a9b41646aac12b410f81..f49ddb473a971f8b5d3116ba1f7e2a835438c14f 100644
 --- a/packages/core/src/session/projector.ts
 +++ b/packages/core/src/session/projector.ts
 @@ -148,7 +148,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
@@ -272,7 +272,7 @@ index f3b5ec439..f49ddb473 100644
        fork_boundary: event.data.boundary,
        project_id: parent.project_id,
 diff --git a/packages/core/test/session-create.test.ts b/packages/core/test/session-create.test.ts
-index edb83d48f..5a2d687d4 100644
+index edb83d48f8a44e76df9257660298f84d96dc34cf..5a2d687d48b4140f01d962bd5fa60594b61d58d6 100644
 --- a/packages/core/test/session-create.test.ts
 +++ b/packages/core/test/session-create.test.ts
 @@ -93,8 +93,6 @@ const logEvents = (session: Session.Interface, sessionID: Session.ID, follow?: b
@@ -319,7 +319,7 @@ index edb83d48f..5a2d687d4 100644
      Effect.gen(function* () {
        const session = yield* Session.Service
 diff --git a/packages/protocol/src/groups/session.ts b/packages/protocol/src/groups/session.ts
-index e0ce88796..9ff239964 100644
+index e0ce88796d31955bf544ddc5104d2ff0a1ae1ec3..9ff2399640ad55228f4784634945ee6e7e1b4b49 100644
 --- a/packages/protocol/src/groups/session.ts
 +++ b/packages/protocol/src/groups/session.ts
 @@ -222,17 +222,20 @@ export const makeSessionGroup = <
@@ -366,7 +366,7 @@ index e0ce88796..9ff239964 100644
          ),
      )
 diff --git a/packages/schema/src/session-event.ts b/packages/schema/src/session-event.ts
-index 79be9aaf4..424436969 100644
+index 79be9aaf491b9c2483a3d6cf4874aec8d3b1d6ec..424436969c2bbfe739a8270119af9bfe5101ee13 100644
 --- a/packages/schema/src/session-event.ts
 +++ b/packages/schema/src/session-event.ts
 @@ -197,6 +197,8 @@ export const Forked = Event.durable({
@@ -379,7 +379,7 @@ index 79be9aaf4..424436969 100644
      instructionEntries: InstructionEntry.Snapshot.pipe(optional),
    },
 diff --git a/packages/server/src/handlers/session.ts b/packages/server/src/handlers/session.ts
-index b95fbe454..b53598968 100644
+index b95fbe4544f5eda77747ec04d57d2f4a7fb61018..b53598968ca50aead830211f9e48609f14c38f33 100644
 --- a/packages/server/src/handlers/session.ts
 +++ b/packages/server/src/handlers/session.ts
 @@ -133,9 +133,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl

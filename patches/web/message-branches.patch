@@ -14,7 +14,7 @@ switcher stays visible; the other actions still wait for hover on desktop.
 Ocelot-Patch: web/message-branches
 
 diff --git a/packages/app/src/session/composer/region.tsx b/packages/app/src/session/composer/region.tsx
-index a95e3d2eb..b1ff894a3 100644
+index a95e3d2eb7026bda35bd08836b8198539032468e..b1ff894a3fad699cf44ba9f191bae9707b99835c 100644
 --- a/packages/app/src/session/composer/region.tsx
 +++ b/packages/app/src/session/composer/region.tsx
 @@ -203,6 +203,7 @@ export function createActiveSessionRegion(input: {
@@ -26,7 +26,7 @@ index a95e3d2eb..b1ff894a3 100644
        } satisfies SessionUserActions,
      },
 diff --git a/packages/app/src/session/revert.ts b/packages/app/src/session/revert.ts
-index 6a47fa834..a6dae7cc5 100644
+index 6a47fa834b8fd916b346587fabd3de172bc4bebf..a6dae7cc589d6232dc64d1fc6e989e57362d6701 100644
 --- a/packages/app/src/session/revert.ts
 +++ b/packages/app/src/session/revert.ts
 @@ -1,4 +1,6 @@
@@ -74,7 +74,7 @@ index 6a47fa834..a6dae7cc5 100644
  
  export type SessionRevert = ReturnType<typeof createSessionRevert>
 diff --git a/packages/session-ui/src/actions.ts b/packages/session-ui/src/actions.ts
-index 7b7a4bfdd..af20f435e 100644
+index 7b7a4bfdd923ff6d7188a289ba6227a5a44ead33..af20f435e624f1d6b08d5c37e58c1866c51b68d2 100644
 --- a/packages/session-ui/src/actions.ts
 +++ b/packages/session-ui/src/actions.ts
 @@ -19,4 +19,15 @@ export type SessionUserAttachmentReference = {
@@ -94,7 +94,7 @@ index 7b7a4bfdd..af20f435e 100644
 +  next?: () => Promise<void> | void
  }
 diff --git a/packages/session-ui/src/components/message-part.css b/packages/session-ui/src/components/message-part.css
-index c30c36b91..c493bc0a7 100644
+index c30c36b9115503892dac4ac4b5cea08faffa7064..c493bc0a7b0a573493a277ef35a09525826d2ac3 100644
 --- a/packages/session-ui/src/components/message-part.css
 +++ b/packages/session-ui/src/components/message-part.css
 @@ -216,6 +216,48 @@
@@ -147,7 +147,7 @@ index c30c36b91..c493bc0a7 100644
      color: var(--v2-text-text-base);
    }
 diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
-index 97427b5bf..c33e862ac 100644
+index 97427b5bf9705331daf1fd6cf98e1a0b18d84576..c33e862acac09db7dc532688f42bc8d0fb53aec4 100644
 --- a/packages/session-ui/src/message/current-message.tsx
 +++ b/packages/session-ui/src/message/current-message.tsx
 @@ -14,7 +14,12 @@ import {
@@ -165,7 +165,7 @@ index 97427b5bf..c33e862ac 100644
  export { currentContentDefaultOpen } from "./current-tool-state"
  
 diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
-index 16a5c6386..f77588ce7 100644
+index 16a5c638663100e720df5069ca2ae7e4a568b334..f77588ce7f6a1ddd771355db53914da583b6be62 100644
 --- a/packages/session-ui/src/message/message-content.tsx
 +++ b/packages/session-ui/src/message/message-content.tsx
 @@ -54,7 +54,7 @@ export async function writeClipboard(text: string): Promise<boolean> {
@@ -245,7 +245,7 @@ index 16a5c6386..f77588ce7 100644
                disabled={state.reverting}
                onMouseDown={(event) => event.preventDefault()}
 diff --git a/packages/ui/src/i18n/en.ts b/packages/ui/src/i18n/en.ts
-index 8af5fbf46..be2f3b224 100644
+index 8af5fbf4691def691472888d0d08dabc1302c699..be2f3b224f4b61225f6b635947505c09fc30e054 100644
 --- a/packages/ui/src/i18n/en.ts
 +++ b/packages/ui/src/i18n/en.ts
 @@ -241,7 +241,9 @@ const source = {

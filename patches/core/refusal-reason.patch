@@ -18,7 +18,7 @@ the same message.
 Ocelot-Patch: core/refusal-reason
 
 diff --git a/packages/ai/src/protocols/anthropic-messages.ts b/packages/ai/src/protocols/anthropic-messages.ts
-index 60ec3c49e..1be8e8026 100644
+index 60ec3c49e68383143c8ae4ec9c99ad0a5c2a53f1..1be8e8026ceefe2651ce51210e290a3ab790b972 100644
 --- a/packages/ai/src/protocols/anthropic-messages.ts
 +++ b/packages/ai/src/protocols/anthropic-messages.ts
 @@ -451,6 +451,14 @@ const AnthropicStreamDelta = Schema.Struct({
@@ -56,7 +56,7 @@ index 60ec3c49e..1be8e8026 100644
        reason: {
          normalized: mapFinishReason(stopReason),
 diff --git a/packages/ai/test/provider/anthropic-messages.test.ts b/packages/ai/test/provider/anthropic-messages.test.ts
-index 3b5c46b81..ea14da196 100644
+index 3b5c46b81794510c35f1c1ef1573c1b1668e4b2c..ea14da1960cae99dd2dee02225815d7f1ed78adc 100644
 --- a/packages/ai/test/provider/anthropic-messages.test.ts
 +++ b/packages/ai/test/provider/anthropic-messages.test.ts
 @@ -1132,6 +1132,43 @@ describe("Anthropic Messages route", () => {
@@ -104,7 +104,7 @@ index 3b5c46b81..ea14da196 100644
      Effect.gen(function* () {
        const response = yield* LLMClient.generate(request).pipe(
 diff --git a/packages/core/src/session/compaction.ts b/packages/core/src/session/compaction.ts
-index fc9d16799..cbd47a3a9 100644
+index fc9d16799a0d77ea21c049d07c88101d7d794ad5..cbd47a3a9913116e0b7ae30d7d51faf2c9d73f57 100644
 --- a/packages/core/src/session/compaction.ts
 +++ b/packages/core/src/session/compaction.ts
 @@ -36,6 +36,7 @@ import { State } from "../state.js"
@@ -126,7 +126,7 @@ index fc9d16799..cbd47a3a9 100644
                  return Effect.fail(
 diff --git a/packages/core/src/session/refusal.ts b/packages/core/src/session/refusal.ts
 new file mode 100644
-index 000000000..9be37d8bb
+index 0000000000000000000000000000000000000000..9be37d8bb53dd4e1279c14472d882bc10563b02e
 --- /dev/null
 +++ b/packages/core/src/session/refusal.ts
 @@ -0,0 +1,20 @@
@@ -151,7 +151,7 @@ index 000000000..9be37d8bb
 +  return `${head}${why} Retrying the same conversation is usually stopped again: edit or rephrase your last message, or switch model.`
 +}
 diff --git a/packages/core/src/session/runner/publish-llm-event.ts b/packages/core/src/session/runner/publish-llm-event.ts
-index ffb9baa14..ebb7956f5 100644
+index ffb9baa14d63366a124fd84f9cec00a64ba86d97..ebb7956f5ec0545f45540a6aed81475a29254ad6 100644
 --- a/packages/core/src/session/runner/publish-llm-event.ts
 +++ b/packages/core/src/session/runner/publish-llm-event.ts
 @@ -12,6 +12,7 @@ import { SessionSchema } from "../schema.js"
@@ -172,7 +172,7 @@ index ffb9baa14..ebb7956f5 100644
          }
          return
 diff --git a/packages/core/test/session-runner-tool-events.test.ts b/packages/core/test/session-runner-tool-events.test.ts
-index a15b20df6..817086caa 100644
+index a15b20df6da6089be5b7a70d9cc8daf49197a181..817086caaaef2fa49945bdb1f68ed5467830db01 100644
 --- a/packages/core/test/session-runner-tool-events.test.ts
 +++ b/packages/core/test/session-runner-tool-events.test.ts
 @@ -592,7 +592,11 @@ test("content-filter finish retains failure evidence until step closeout", async
@@ -189,7 +189,7 @@ index a15b20df6..817086caa 100644
      rawFinish: "refusal",
      providerState: {
 diff --git a/packages/core/test/session-runner.test.ts b/packages/core/test/session-runner.test.ts
-index f41f61e74..b7db8f2bf 100644
+index f41f61e7472560f67b88354cda5f9e4cf1c9fc6f..b7db8f2bfc328809593b161765bf96dfc399d7bf 100644
 --- a/packages/core/test/session-runner.test.ts
 +++ b/packages/core/test/session-runner.test.ts
 @@ -4990,7 +4990,10 @@ describe("SessionRunnerLLM", () => {

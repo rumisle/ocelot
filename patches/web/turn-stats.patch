@@ -20,7 +20,7 @@ Short labels so it fits one line on a phone.
 Ocelot-Patch: web/turn-stats
 
 diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
-index 73552e6e4..97427b5bf 100644
+index 73552e6e47dfd01e9cd1f008b7c5580e7034c3d6..97427b5bf9705331daf1fd6cf98e1a0b18d84576 100644
 --- a/packages/session-ui/src/message/current-message.tsx
 +++ b/packages/session-ui/src/message/current-message.tsx
 @@ -5,7 +5,12 @@ import type {
@@ -54,7 +54,7 @@ index 73552e6e4..97427b5bf 100644
          )}
        </Match>
 diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
-index ee7b53c2b..16a5c6386 100644
+index ee7b53c2b4daeed32dedea8bc543eafbd5cb8825..16a5c638663100e720df5069ca2ae7e4a568b334 100644
 --- a/packages/session-ui/src/message/message-content.tsx
 +++ b/packages/session-ui/src/message/message-content.tsx
 @@ -451,6 +451,7 @@ export function AssistantTextContent(props: {
@@ -101,7 +101,7 @@ index ee7b53c2b..16a5c6386 100644
    id: string
    content: SessionMessageAssistantReasoning
 diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
-index ee677260e..684d65cbd 100644
+index ee677260e686b1cdb49b0604fac5631db903b10c..684d65cbd49254fa88199a1db764ddd5f9eb00ff 100644
 --- a/packages/session-ui/src/timeline/session-timeline-row.tsx
 +++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
 @@ -104,6 +104,34 @@ export function createSessionTimelineRowRenderer(input: {

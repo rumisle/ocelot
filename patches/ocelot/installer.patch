@@ -13,7 +13,7 @@ every release, so it installs with:
 Ocelot-Patch: ocelot/installer
 
 diff --git a/install b/install
-index b17ccfde3..23e249727 100755
+index b17ccfde3b5a7b8bf40ade40bbb057c7f7ae3092..23e249727fa150cdc45dc7f4bd6ebc27b3b5e0d1 100755
 --- a/install
 +++ b/install
 @@ -1,7 +1,8 @@

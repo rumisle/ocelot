@@ -18,7 +18,7 @@ showed when nothing else looked busy, so it kept appearing and disappearing.
 Ocelot-Patch: web/working-timer
 
 diff --git a/packages/app/src/composer/adapter.ts b/packages/app/src/composer/adapter.ts
-index ffc50788d..1a588d253 100644
+index ffc50788d01f645ba670c406dccfa46f22d96bc1..1a588d2530cfd4b1f11190822d53ea09a0fa2bcc 100644
 --- a/packages/app/src/composer/adapter.ts
 +++ b/packages/app/src/composer/adapter.ts
 @@ -88,6 +88,8 @@ type ComposerAdapterBase = {
@@ -31,7 +31,7 @@ index ffc50788d..1a588d253 100644
  }
  
 diff --git a/packages/app/src/composer/editor/editor.tsx b/packages/app/src/composer/editor/editor.tsx
-index 930a07fe2..83a457314 100644
+index 930a07fe25bd343650d89afcb2c8727b64b32a06..83a457314d8cd4f78b06a27dcda96eca12b3d662 100644
 --- a/packages/app/src/composer/editor/editor.tsx
 +++ b/packages/app/src/composer/editor/editor.tsx
 @@ -1,4 +1,14 @@
@@ -100,7 +100,7 @@ index 930a07fe2..83a457314 100644
    mode: ComposerMode
    stopping: boolean
 diff --git a/packages/app/src/composer/editor/interaction.ts b/packages/app/src/composer/editor/interaction.ts
-index 441670818..051f6faa3 100644
+index 4416708189631dd31a7d78e19a17dbfbce74867b..051f6faa3297524ffdecfd9ace254b5de51bcecf 100644
 --- a/packages/app/src/composer/editor/interaction.ts
 +++ b/packages/app/src/composer/editor/interaction.ts
 @@ -41,6 +41,8 @@ export type ComposerEditorView = {
@@ -125,7 +125,7 @@ index 441670818..051f6faa3 100644
      }
      setState(reconcile(result.state))
 diff --git a/packages/app/src/composer/model.ts b/packages/app/src/composer/model.ts
-index 83ec6cf2e..1c8201f76 100644
+index 83ec6cf2e78fba5fbf0e7d548bcaf0e98c7011c7..1c8201f762e5d17c7726e56826de19f07d100c8b 100644
 --- a/packages/app/src/composer/model.ts
 +++ b/packages/app/src/composer/model.ts
 @@ -1,7 +1,7 @@
@@ -158,7 +158,7 @@ index 83ec6cf2e..1c8201f76 100644
          onSubmit: (submitOptions) => {
            if (!available()) return
 diff --git a/packages/app/src/session/composer/adapter.ts b/packages/app/src/session/composer/adapter.ts
-index 98ae8bea8..3bf6c488d 100644
+index 98ae8bea87d0792ffef1423c9d6a2bbd17e822d0..3bf6c488d5bc81da3fdc5c614d950390fb3c4f2e 100644
 --- a/packages/app/src/session/composer/adapter.ts
 +++ b/packages/app/src/session/composer/adapter.ts
 @@ -25,6 +25,9 @@ export function createActiveComposerAdapter(input: {
@@ -172,7 +172,7 @@ index 98ae8bea8..3bf6c488d 100644
      setEditor: input.setEditor,
      session: () => ({
 diff --git a/packages/app/src/session/timeline/message-timeline.tsx b/packages/app/src/session/timeline/message-timeline.tsx
-index 58fbbaaeb..04aa9ec5b 100644
+index 58fbbaaebfd5baceae537517e72d9cffb08f1d0e..04aa9ec5b5801366461ad7f0a6cf8106ece95bb4 100644
 --- a/packages/app/src/session/timeline/message-timeline.tsx
 +++ b/packages/app/src/session/timeline/message-timeline.tsx
 @@ -19,7 +19,6 @@ import { IconButton } from "@opencode/ui/icon-button"
@@ -252,7 +252,7 @@ index 58fbbaaeb..04aa9ec5b 100644
                  <div
                    ref={setBackgroundHintRef}
 diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
-index 99ac059fc..31257b811 100644
+index 99ac059fc3354bf81c54034fba32f4f23db4cef3..31257b811a12dbde6361213cd5424ba6797ee37f 100644
 --- a/packages/client/src/solid/data.ts
 +++ b/packages/client/src/solid/data.ts
 @@ -254,6 +254,10 @@ export function createData(config: CreateDataInput) {

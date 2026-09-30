@@ -9,7 +9,7 @@ files and sending keeps the old messages as a branch (patch core/message-branche
 Ocelot-Patch: tui/message-branches
 
 diff --git a/packages/tui/src/routes/session/dialog-message.tsx b/packages/tui/src/routes/session/dialog-message.tsx
-index 117491cc7..3435a95d7 100644
+index 117491cc7d833fca7592a84617b7052a1f0cf7c9..3435a95d7aa3191acf2b879b8720d3347c6fb3e9 100644
 --- a/packages/tui/src/routes/session/dialog-message.tsx
 +++ b/packages/tui/src/routes/session/dialog-message.tsx
 @@ -31,9 +31,10 @@ export function DialogMessage(props: {

@@ -21,7 +21,7 @@ Client types and openapi.json are regenerated (openapi.json was already stale).
 Ocelot-Patch: core/session-notices
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index 375ea22ec..dd3c6929c 100644
+index 375ea22ec5616b2028f238f890690a31c1412c6b..dd3c6929c39894a46d883bc9ad6953130762a70a 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
 @@ -252,6 +252,27 @@ export type SessionUpdateInput = {
@@ -107,7 +107,7 @@ index 375ea22ec..dd3c6929c 100644
  }
  export type MessageListOutput = {
 diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
-index 3450f794f..95afdbd67 100644
+index 3450f794ffcea7c46311a5e026f0c3544b7a3419..95afdbd67ee9c77fa3d24fa3a8ede03c21b4267f 100644
 --- a/packages/client/src/effect/generated/client.ts
 +++ b/packages/client/src/effect/generated/client.ts
 @@ -42,6 +42,8 @@ import type {
@@ -152,7 +152,7 @@ index 3450f794f..95afdbd67 100644
    prompt: EndpointSessionPrompt(raw),
    command: EndpointSessionCommand(raw),
 diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
-index 97e215583..eb77a2aeb 100644
+index 97e215583b05b48b409a55af4fd8c89e076991dd..eb77a2aeb020d53dca80dcef6766eb931cada457 100644
 --- a/packages/client/src/promise/generated/client.ts
 +++ b/packages/client/src/promise/generated/client.ts
 @@ -36,6 +36,8 @@ import type {
@@ -190,7 +190,7 @@ index 97e215583..eb77a2aeb 100644
          request<SessionMoveOutput>(
            {
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index 63812dedb..2e35667de 100644
+index 63812dedba593f33ec66194d60f832a067a3f972..2e35667ded490efc4a9eaa634fa3748545d9b7df 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
 @@ -159,6 +159,16 @@ export type SessionMessageIdle = {
@@ -427,7 +427,7 @@ index 63812dedb..2e35667de 100644
    }["type"]
  }
 diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
-index 31257b811..f1f6b256d 100644
+index 31257b811a12dbde6361213cd5424ba6797ee37f..f1f6b256d287d8d7a8bfbbced80f4c30d860eb48 100644
 --- a/packages/client/src/solid/data.ts
 +++ b/packages/client/src/solid/data.ts
 @@ -816,6 +816,26 @@ export function createData(config: CreateDataInput) {
@@ -458,7 +458,7 @@ index 31257b811..f1f6b256d 100644
          message.insert(event.data.sessionID, {
            id: messageIDFromEvent(event.id),
 diff --git a/packages/core/src/plugin/host.ts b/packages/core/src/plugin/host.ts
-index dd4bd996e..f4d4f3d53 100644
+index dd4bd996e10bffcb7b83328378565dc156164927..f4d4f3d5334e3d9de61e66c3b5bbd26981815fc0 100644
 --- a/packages/core/src/plugin/host.ts
 +++ b/packages/core/src/plugin/host.ts
 @@ -547,6 +547,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
@@ -470,7 +470,7 @@ index dd4bd996e..f4d4f3d53 100644
          sessions
            .interrupt(input.sessionID, { resume: input.resume })
 diff --git a/packages/core/src/session.ts b/packages/core/src/session.ts
-index 90e9fc474..c2c2fd73d 100644
+index 90e9fc474ac988667024fecb01bbeb8e05f1c036..c2c2fd73db4c14b8338701c29bf3b3cfe19a200f 100644
 --- a/packages/core/src/session.ts
 +++ b/packages/core/src/session.ts
 @@ -181,6 +181,10 @@ export interface Interface {
@@ -493,7 +493,7 @@ index 90e9fc474..c2c2fd73d 100644
        compact: (input) => sessions.forSession(input.sessionID).compact(input),
        wait: (sessionID) => sessions.forSession(sessionID).wait(),
 diff --git a/packages/core/src/session/message-updater.ts b/packages/core/src/session/message-updater.ts
-index e39c659e2..d0a084f87 100644
+index e39c659e2cafa2990cd8ee62c140bff20f995d96..d0a084f8729864a45da8b4454eada58dd42a415e 100644
 --- a/packages/core/src/session/message-updater.ts
 +++ b/packages/core/src/session/message-updater.ts
 @@ -14,6 +14,9 @@ export interface Adapter {
@@ -529,7 +529,7 @@ index e39c659e2..d0a084f87 100644
          return adapter.appendMessage(
            SessionMessage.Skill.make({
 diff --git a/packages/core/src/session/projector.ts b/packages/core/src/session/projector.ts
-index f49ddb473..665c6d0c9 100644
+index f49ddb473a971f8b5d3116ba1f7e2a835438c14f..665c6d0c9cd70118828a68836b6f2158f584157c 100644
 --- a/packages/core/src/session/projector.ts
 +++ b/packages/core/src/session/projector.ts
 @@ -377,6 +377,26 @@ function run(db: DatabaseService, event: MessageEvent) {
@@ -582,7 +582,7 @@ index f49ddb473..665c6d0c9 100644
          if (
            event.type === SessionEvent.Step.Failed.type &&
 diff --git a/packages/core/src/session/runner/to-llm-message.ts b/packages/core/src/session/runner/to-llm-message.ts
-index f475c5951..b2e5a769f 100644
+index f475c595121f66d1802d402aa266d48eb09070ac..b2e5a769fc8b17b2ac7b1be8d1b8bb03d41a51e3 100644
 --- a/packages/core/src/session/runner/to-llm-message.ts
 +++ b/packages/core/src/session/runner/to-llm-message.ts
 @@ -251,6 +251,7 @@ function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMe
@@ -594,7 +594,7 @@ index f475c5951..b2e5a769f 100644
      case "model-switched":
        return modelSwitched(message, model)
 diff --git a/packages/core/src/session/session.ts b/packages/core/src/session/session.ts
-index 0738f4380..9aab9912e 100644
+index 0738f438063f6cd0ee038ae7040979ed07be3864..9aab9912e29481709a8feb4487b8e761190b1ab5 100644
 --- a/packages/core/src/session/session.ts
 +++ b/packages/core/src/session/session.ts
 @@ -80,6 +80,29 @@ export const make = Effect.fn("Session.make")(function* () {
@@ -652,7 +652,7 @@ index 0738f4380..9aab9912e 100644
        switchAgent,
        switchModel,
 diff --git a/packages/core/test/plugin/host.ts b/packages/core/test/plugin/host.ts
-index eaea2bb58..e00549be1 100644
+index eaea2bb5879b3b410043640772e9c506e6e0d4d6..e00549be11ea30131e99e1ac75039eeb013a0962 100644
 --- a/packages/core/test/plugin/host.ts
 +++ b/packages/core/test/plugin/host.ts
 @@ -173,6 +173,7 @@ export function host(overrides: Overrides = {}): Plugin.Context {
@@ -664,7 +664,7 @@ index eaea2bb58..e00549be1 100644
        wait: overrides.session?.wait ?? (() => Effect.die("unused session.wait")),
        context: overrides.session?.context ?? (() => Effect.die("unused session.context")),
 diff --git a/packages/core/test/session-create.test.ts b/packages/core/test/session-create.test.ts
-index 5a2d687d4..f419e7f08 100644
+index 5a2d687d48b4140f01d962bd5fa60594b61d58d6..f419e7f0843cd24b23435e5390efe06ff39f32af 100644
 --- a/packages/core/test/session-create.test.ts
 +++ b/packages/core/test/session-create.test.ts
 @@ -307,6 +307,38 @@ describe("Session.create", () => {
@@ -707,7 +707,7 @@ index 5a2d687d4..f419e7f08 100644
      Effect.gen(function* () {
        const session = yield* Session.Service
 diff --git a/packages/plugin/src/effect/session.ts b/packages/plugin/src/effect/session.ts
-index bea12a931..d20410e30 100644
+index bea12a931283459c5c1bfa6163568e830bb4d02d..d20410e302bf47ffd439859406c665fd6387d2ab 100644
 --- a/packages/plugin/src/effect/session.ts
 +++ b/packages/plugin/src/effect/session.ts
 @@ -160,6 +160,7 @@ export type SessionDomain = Pick<
@@ -719,7 +719,7 @@ index bea12a931..d20410e30 100644
    | "update"
    | "move"
 diff --git a/packages/plugin/src/promise/adapter.ts b/packages/plugin/src/promise/adapter.ts
-index 15ccb58a0..b00580360 100644
+index 15ccb58a0d0004191a7101a68325e57335ce88b9..b0058036017d7085d1a9f4173815c0bf02aa39bd 100644
 --- a/packages/plugin/src/promise/adapter.ts
 +++ b/packages/plugin/src/promise/adapter.ts
 @@ -586,6 +586,7 @@ export function fromPromise(plugin: Plugin) {
@@ -731,7 +731,7 @@ index 15ccb58a0..b00580360 100644
              update: adaptApiMethod(SessionEndpoints["session.update"], host.session.update),
              move: adaptApiMethod(SessionEndpoints["session.move"], host.session.move),
 diff --git a/packages/plugin/src/promise/session.ts b/packages/plugin/src/promise/session.ts
-index ac3aa3888..885bd5fbc 100644
+index ac3aa3888a5b7d16328f68673136044016a7c15f..885bd5fbc69f8a4b1a3baf74b9d5a048474d7dd5 100644
 --- a/packages/plugin/src/promise/session.ts
 +++ b/packages/plugin/src/promise/session.ts
 @@ -160,6 +160,7 @@ export type SessionDomain = Pick<
@@ -743,7 +743,7 @@ index ac3aa3888..885bd5fbc 100644
    | "update"
    | "move"
 diff --git a/packages/protocol/openapi.json b/packages/protocol/openapi.json
-index 7ca75e0ec..486de02f3 100644
+index 7ca75e0ec9bc8994bf0d8e74d4b684739f63923e..486de02f311812d27f8981892551b1ab489a4f45 100644
 --- a/packages/protocol/openapi.json
 +++ b/packages/protocol/openapi.json
 @@ -886,9 +886,19 @@
@@ -1033,7 +1033,7 @@ index 7ca75e0ec..486de02f3 100644
          "type": "object"
        },
 diff --git a/packages/protocol/src/groups/message.ts b/packages/protocol/src/groups/message.ts
-index c744abd88..75f564fed 100644
+index c744abd880f1d55e3a0b68907b7466d48f1cdfd6..75f564fede0136d97d06b19946ce9008e44aa1ca 100644
 --- a/packages/protocol/src/groups/message.ts
 +++ b/packages/protocol/src/groups/message.ts
 @@ -32,6 +32,7 @@ export const SessionMessagesQuery = Schema.Struct({
@@ -1053,7 +1053,7 @@ index c744abd88..75f564fed 100644
  
  export const MessageGroup = HttpApiGroup.make("server.message")
 diff --git a/packages/protocol/src/groups/session.ts b/packages/protocol/src/groups/session.ts
-index 9ff239964..1fc15544b 100644
+index 9ff2399640ad55228f4784634945ee6e7e1b4b49..1fc15544b53b45672d5adb9e70b996aebdbced03 100644
 --- a/packages/protocol/src/groups/session.ts
 +++ b/packages/protocol/src/groups/session.ts
 @@ -380,6 +380,30 @@ export const makeSessionGroup = <
@@ -1088,7 +1088,7 @@ index 9ff239964..1fc15544b 100644
        HttpApiEndpoint.post("session.move", "/api/session/:sessionID/move", {
          params: { sessionID: Session.ID },
 diff --git a/packages/schema/src/session-event.ts b/packages/schema/src/session-event.ts
-index 424436969..1733b2892 100644
+index 424436969c2bbfe739a8270119af9bfe5101ee13..1733b28924a1c90e6971cb5858d1a62a4c36e4b9 100644
 --- a/packages/schema/src/session-event.ts
 +++ b/packages/schema/src/session-event.ts
 @@ -293,6 +293,25 @@ export const Synthetic = Event.durable({
@@ -1126,7 +1126,7 @@ index 424436969..1733b2892 100644
    Shell.Started,
    Shell.Ended,
 diff --git a/packages/schema/src/session-message.ts b/packages/schema/src/session-message.ts
-index c83442bc5..d37cd4a04 100644
+index c83442bc50f3794393a281852229eb5b729c2834..d37cd4a049e139b0f3afa970bb88c5179461cbc8 100644
 --- a/packages/schema/src/session-message.ts
 +++ b/packages/schema/src/session-message.ts
 @@ -294,6 +294,20 @@ export const Idle = Schema.Struct({
@@ -1165,7 +1165,7 @@ index c83442bc5..d37cd4a04 100644
 +  | Notice
  export type Type = Info["type"]
 diff --git a/packages/server/src/handlers/session.ts b/packages/server/src/handlers/session.ts
-index b53598968..0d7ed39a4 100644
+index b53598968ca50aead830211f9e48609f14c38f33..0d7ed39a40a8f098351b75001594b4cf36a613bd 100644
 --- a/packages/server/src/handlers/session.ts
 +++ b/packages/server/src/handlers/session.ts
 @@ -394,6 +394,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl

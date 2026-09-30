@@ -13,7 +13,7 @@ rows stay small. Nested progress still passes through as before.
 Ocelot-Patch: core/codemode-child-sessions
 
 diff --git a/packages/core/src/codemode/tool.ts b/packages/core/src/codemode/tool.ts
-index 74742f649..910d7d6d7 100644
+index 74742f64997e085aee5e8ee15dba30ee63bf5a6a..910d7d6d74cfe9e2b4b7266a839d5b7eae27a367 100644
 --- a/packages/core/src/codemode/tool.ts
 +++ b/packages/core/src/codemode/tool.ts
 @@ -25,6 +25,8 @@ const ExecuteCall = Schema.Struct({
@@ -107,7 +107,7 @@ index 74742f649..910d7d6d7 100644
  
  export const catalog = (inventory: Inventory) => {
 diff --git a/packages/core/test/tool-execute.test.ts b/packages/core/test/tool-execute.test.ts
-index 59ab70d56..b545acb96 100644
+index 59ab70d569f51b8115d0dedcac0ce37f39784188..b545acb96a05c5eb0543bafdb6ca997a4c98a189 100644
 --- a/packages/core/test/tool-execute.test.ts
 +++ b/packages/core/test/tool-execute.test.ts
 @@ -145,3 +145,54 @@ test("execute supports callable namespace tools", async () => {
