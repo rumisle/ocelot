@@ -50,7 +50,7 @@ Bun.serve({
   async fetch(req) {
     if (!new URL(req.url).pathname.endsWith("/messages")) return new Response("not found", { status: 404 })
     const body = await req.json()
-    if (LOG) appendFileSync(LOG, JSON.stringify({ time: Date.now(), messages: body.messages?.length, tokens: prompt(body).cache_read_input_tokens + prompt(body).cache_creation_input_tokens + 40, last: newestUserText(body).text.slice(0, 40) }) + "\n")
+    if (LOG) appendFileSync(LOG, JSON.stringify({ time: Date.now(), messages: body.messages?.length, tokens: prompt(body).cache_read_input_tokens + prompt(body).cache_creation_input_tokens + 40, last: newestUserText(body).text.slice(0, 40), roles: (body.messages ?? []).map((m: any) => m.role[0]).join("") }) + "\n")
     const { text, afterTool } = newestUserText(body)
     const shell = !afterTool && text.match(/SHELL (.+)/)
     const stream = new ReadableStream({

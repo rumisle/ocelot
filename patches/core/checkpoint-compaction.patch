@@ -65,7 +65,7 @@ index 7080d88836c54597c11aa2fd36fa1bd28eb96cee..050f9e38520836197f50bd6cdecd3152
        }
      })
 diff --git a/packages/core/src/session/compaction.ts b/packages/core/src/session/compaction.ts
-index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe3112a057 100644
+index baa80a857fbefa912c0ef54437b05cecb93b9c9c..4703df0c29ad6d855606b95ef140d0d3e62a5b54 100644
 --- a/packages/core/src/session/compaction.ts
 +++ b/packages/core/src/session/compaction.ts
 @@ -11,6 +11,7 @@ import {
@@ -81,7 +81,7 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
  import type { SessionError } from "@opencode/schema/session-error"
  import { makeLocationNode } from "@opencode/util/effect/app-node"
 -import { Context, Effect, Layer, Result, Stream } from "effect"
-+import { Context, Duration, Effect, Layer, Result, Stream } from "effect"
++import { Context, DateTime, Duration, Effect, Layer, Result, Stream } from "effect"
  import { Bus } from "../bus.js"
  import { Database } from "../database/database.js"
  import { llmClient } from "../effect/app-node-platform.js"
@@ -100,7 +100,16 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
  }
  
  export type Editor = {
-@@ -86,6 +95,8 @@ type Prepared = Effect.Success<ReturnType<SessionModelRequest.Interface["compact
+@@ -75,6 +84,8 @@ type Result = {
+   readonly providerState?: SessionMessage.ProviderState
+   readonly providerContext?: SessionProviderContext.Info
+   readonly metadata?: Record<string, unknown>
++  /** ocelot: the first message kept verbatim after the summary (checkpoint strategy); `recent` is then empty. */
++  readonly keep?: { readonly id: SessionMessage.ID; readonly seq: number }
+ }
+ 
+ type Failure = {
+@@ -86,6 +97,8 @@ type Prepared = Effect.Success<ReturnType<SessionModelRequest.Interface["compact
  type Streamed = {
    readonly text: string
    readonly providerState?: SessionMessage.ProviderState
@@ -109,7 +118,7 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
  }
  
  const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }
-@@ -98,6 +109,15 @@ const UNKNOWN_WINDOW = 200_000
+@@ -98,6 +111,15 @@ const UNKNOWN_WINDOW = 200_000
  const TOOL_OUTPUT_MAX_CHARS = 1_250
  const IMAGE_TOKEN_ESTIMATE = 1_500
  const PDF_TOKEN_ESTIMATE = 2_000
@@ -125,7 +134,7 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
  
  const SUMMARY_TEMPLATE = `You MUST use this format for your response (you may omit sections that aren't applicable). Do not include the <template> tags in your response.
  <template>
-@@ -203,12 +223,13 @@ export const layer = Layer.effect(
+@@ -203,12 +225,13 @@ export const layer = Layer.effect(
  
        // Only the user compacts when automatic compaction is off, overflow included.
        if (trigger.reason !== "manual" && !settings.auto) return { status: "skipped" }
@@ -143,7 +152,7 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
        // The provider just rejected this context, so the estimate ran low; the first attempt already aims below it.
        const budget =
          trigger.reason === "overflow" ? Math.min(cap, Math.floor(estimateContext(context) * SHRINK_STEPS[0])) : cap
-@@ -216,7 +237,16 @@ export const layer = Layer.effect(
+@@ -216,7 +239,16 @@ export const layer = Layer.effect(
        const compaction =
          context.model.compaction?.type === "native"
            ? compactNatively(trigger, budget, settings.keep)
@@ -161,7 +170,7 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
        return yield* compaction.pipe(
          Effect.matchEffect({
            onSuccess: (result) => publish(trigger, result),
-@@ -259,6 +289,7 @@ export const layer = Layer.effect(
+@@ -259,6 +291,7 @@ export const layer = Layer.effect(
        trigger: Trigger,
        budget: number,
        keep: number,
@@ -169,7 +178,7 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
      ): Effect.fn.Return<Result, Failure> {
        const context = trigger.context
        const split = splitConversation(context.messages, keep)
-@@ -292,7 +323,58 @@ export const layer = Layer.effect(
+@@ -292,7 +325,66 @@ export const layer = Layer.effect(
          })
  
        const overhead = Token.estimate(prompt) + Token.estimate(NUDGE)
@@ -184,18 +193,20 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
 +     * tool_choice, would invalidate the cached messages. The reply must be the checkpoint: a tool call, a missing
 +     * template, or a reply too short to be one gets one reminder, then the compaction falls back to `summarize`.
 +     *
-+     *   [system][…whole context…][checkpoint prompt]  →  [S + "recent"]
++     *   [system][…whole context…][checkpoint prompt]  →  [S][kept…]
 +     *
-+     * The recent part is kept as upstream keeps it, and the checkpoint prompt names where it starts.
++     * The newest messages stay as they are (`checkpointCut`): later requests are [S][kept messages…][new…], and the
++     * checkpoint prompt names where the kept part starts.
 +     */
 +    const checkpoint = Effect.fnUntraced(function* (
 +      trigger: Trigger,
 +      settings: Settings,
 +    ): Effect.fn.Return<Result, Failure> {
 +      const context = trigger.context
-+      const split = splitConversation(context.messages, settings.keep)
-+      if (!split) return yield* Effect.fail(NOTHING_TO_COMPACT)
-+      const prompt = buildCheckpointPrompt(split.recent)
++      const cut = checkpointCut(context, settings.keep)
++      if (cut === undefined) return yield* Effect.fail(NOTHING_TO_COMPACT)
++      const kept = context.messages[cut]
++      const prompt = buildCheckpointPrompt(describeKept(kept))
 +      const size = estimateContext(context)
 +      const prepared = yield* prepare(context, context.messages, size)
 +      const idle = settings.timeout ?? CHECKPOINT_IDLE_MS
@@ -204,13 +215,13 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
 +        Effect.gen(function* () {
 +          const prompted = LLMRequest.update(request, { messages: [...request.messages, Message.user(prompt)] })
 +          const reply = yield* stream(context, prompted, prepared.options, idle)
-+          if (isCheckpoint(reply)) return { ...reply, recent: split.recent }
++          if (isCheckpoint(reply)) return { ...reply, recent: "" }
 +
 +          const nudged = LLMRequest.update(prompted, {
 +            messages: [...prompted.messages, Message.user(CHECKPOINT_NUDGE)],
 +          })
 +          const retry = yield* stream(context, nudged, prepared.options, idle)
-+          if (isCheckpoint(retry)) return { ...retry, recent: split.recent }
++          if (isCheckpoint(retry)) return { ...retry, recent: "" }
 +          return yield* Effect.fail<Failure>({
 +            error: {
 +              type: "compaction.failed",
@@ -225,11 +236,17 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
 +      // flattened by `deliver` like a summary's, which gives up the cache but still compacts.
 +      const window = context.model.limit.input || context.model.limit.context || UNKNOWN_WINDOW
 +      const target = Math.max(size, window - RESERVE_MIN) - Token.estimate(prompt) - Token.estimate(CHECKPOINT_NUDGE)
-+      return yield* deliver(trigger, prepared, split.recent, target, send)
++      const result = yield* deliver(trigger, prepared, "", target, send)
++      if (result.providerContext || !kept) return result
++      const seq = yield* SessionHistory.sequenceOf(db, context.session.id, kept.id)
++      if (seq !== undefined) return { ...result, keep: { id: kept.id, seq } }
++      // Not stored (never in practice): keep the messages as upstream does, as text beside the checkpoint.
++      const recent = context.messages.slice(cut).map(messageToText).filter(Boolean).join("\n\n")
++      return { ...result, recent }
      })
  
      /**
-@@ -373,10 +455,11 @@ export const layer = Layer.effect(
+@@ -373,10 +465,11 @@ export const layer = Layer.effect(
        recent: string,
        target: number,
        send: (request: LLMRequest) => Effect.Effect<Result, AIError | Failure>,
@@ -242,7 +259,7 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
          yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: context.session.id, reason: "auto", recent })
        }
        if (prepared.event.result) return yield* fromHook(context, prepared.event.result, recent)
-@@ -489,12 +572,29 @@ export const layer = Layer.effect(
+@@ -489,12 +582,29 @@ export const layer = Layer.effect(
        })
      }
  
@@ -273,7 +290,7 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
          Stream.runFoldEffect(
            (): Streamed => ({ text: "" }),
            (streamed, event): Effect.Effect<Streamed, AIError | Failure> => {
-@@ -508,6 +608,8 @@ export const layer = Layer.effect(
+@@ -508,6 +618,8 @@ export const layer = Layer.effect(
                )
              }
  
@@ -282,7 +299,31 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
              if (LLMEvent.is.textDelta(event)) {
                return bus
                  .publish(SessionEvent.Compaction.Delta, { sessionID, text: event.text })
-@@ -891,6 +993,91 @@ export const estimatePrompt = (context: SessionContext.Loaded) => {
+@@ -633,6 +745,7 @@ export const layer = Layer.effect(
+         SessionEvent.Compaction.Ended,
+         {
+           sessionID,
++          ...(outcome.keep ? { keep: outcome.keep } : {}),
+           reason,
+           model: context.model.ref,
+           providerState: outcome.providerState,
+@@ -861,7 +974,14 @@ export const estimateContext = (context: SessionContext.Loaded) => {
+ 
+ /** The prompt size: `measured` is what the provider reported at the latest response, `estimated` is the text since. */
+ export const estimatePrompt = (context: SessionContext.Loaded) => {
+-  const anchorIndex = context.messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
++  // ocelot: messages kept verbatim by a checkpoint still carry the usage of the context before it.
++  const first = context.messages[0]
++  const since = first?.type === "compaction" && first.status === "completed" && first.keep ? first.time.created : undefined
++  const anchorIndex = context.messages.findLastIndex(
++    (message) =>
++      hasMeasuredPrompt(message, context.model.ref) &&
++      (since === undefined || DateTime.toEpochMillis(message.time.created) > DateTime.toEpochMillis(since)),
++  )
+   const anchor = context.messages[anchorIndex]
+   const base = transcript(context, context.messages.slice(Math.max(0, anchorIndex)))
+   // TODO: Pass compaction history the runner has already shaped. This and `recentUserMessages` repeat the
+@@ -891,6 +1011,141 @@ export const estimatePrompt = (context: SessionContext.Loaded) => {
   * is more. The summary request is capped at the same size, so its output limit is whatever the reserve leaves. A window
   * too small to give up `RESERVE_MIN` keeps 10%.
   */
@@ -319,15 +360,13 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
 +  "That was not the checkpoint. Do not call tools and do not continue the work. Reply with only the checkpoint, using the exact section headings from the format above."
 +
 +/** ocelot: pi's checkpoint sections and OpenCode's rules, sent as a follow-up to the live context. */
-+export const buildCheckpointPrompt = (recent: string) => {
-+  const start = recent.match(/^\[User\]: (.*)$/m)?.[1]
-+  const quoted = start && (start.length > 80 ? `${start.slice(0, 80)}…` : start)
++export const buildCheckpointPrompt = (kept?: string) => {
 +  return [
 +    "This is not a new task and not a message from the user. Your only job now is to write a checkpoint of the conversation above, so another agent can continue the work from it.",
 +    "Do not call tools. Do not continue the work. Do not answer questions from the conversation. Output only the checkpoint in the format below, with no preamble or closing remarks.",
-+    ...(quoted
++    ...(kept
 +      ? [
-+          `The latest part of the conversation, from the user message starting "${quoted}" onward, will be attached after this checkpoint as a transcript. Summarize what came before it in detail; for Progress and Next Steps, describe the state as of the very end of the conversation.`,
++          `The conversation from ${kept} onward stays in the context verbatim after this checkpoint. Summarize what came before it in detail; for Progress and Next Steps, describe the state as of the very end of the conversation.`,
 +        ]
 +      : []),
 +    "If the conversation begins with an earlier checkpoint, treat it as history, not as truth: carry forward only what is still true and still needed. Drop anything that later messages resolved, finished, contradicted, or made irrelevant.",
@@ -371,9 +410,204 @@ index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe
 +  ].join("\n\n")
 +}
 +
++/**
++ * ocelot: where the kept messages start, like pi's cut: walk back from the newest message until `keep` tokens,
++ * then start at the user message that opened that exchange, unless the exchange from there is over twice `keep`
++ * (a long autonomous run), in which case start at the next step. A step is one assistant message with its tool
++ * calls and results, so no cut separates a call from its result. At least one message stays to summarize (an
++ * earlier checkpoint does not count); when everything fits, only the latest exchange is kept, and a single one is
++ * summarized whole. Undefined when there is nothing to compact.
++ */
++const checkpointCut = (context: SessionContext.Loaded, keep: number) => {
++  const messages = context.messages
++  const first = previousCompaction(messages) ? 1 : 0
++  if (messages.length <= first) return undefined
++  const sizes = messages.map((message) =>
++    toLLMMessages([message], context.model.ref).reduce((sum, item) => sum + estimateMessage(item), 0),
++  )
++  const tail = (from: number) => sizes.slice(from).reduce((sum, size) => sum + size, 0)
++  // Everything fits: keep the latest exchange, or during a run with no user message since, the latest step.
++  const latestUser = messages.findLastIndex((message, index) => index > first && message.type === "user")
++  const latestStep = messages.findLastIndex((message, index) => index > first && message.type === "assistant")
++  const fallback = latestUser !== -1 ? latestUser : latestStep !== -1 ? latestStep : messages.length
++
++  let crossed = -1
++  for (let index = messages.length - 1, total = 0; index > first; index--) {
++    total += sizes[index]!
++    if (total >= keep) {
++      crossed = index
++      break
++    }
++  }
++  if (crossed === -1) return fallback
++
++  const user = messages.findLastIndex((message, index) => index > first && index <= crossed && message.type === "user")
++  if (user !== -1 && tail(user) <= 2 * keep) return user
++  const step = messages.findIndex((message, index) => index >= crossed && index > first && message.type === "assistant")
++  return step === -1 ? fallback : step
++}
++
++/** ocelot: names the first kept message for the checkpoint prompt. */
++const describeKept = (message: SessionMessage.Info | undefined) => {
++  if (!message) return undefined
++  const clip = (text: string) => {
++    const line = text.trim().split("\n")[0] ?? ""
++    return line.length > 80 ? `${line.slice(0, 80)}…` : line
++  }
++  if (message.type === "user") return `the user message starting "${clip(message.text)}"`
++  if (message.type === "assistant") {
++    const text = message.content.find((part) => part.type === "text")
++    return text?.type === "text" && text.text.trim() ? `your reply starting "${clip(text.text)}"` : "your latest steps"
++  }
++  return "the latest messages"
++}
++
  const calculateCeiling = (limit: SessionContext.Loaded["model"]["limit"], buffer: number | undefined) => {
    // Unknown limits are reported as 0. An unknown input limit falls back to the context window; with no window at
    // all, only a provider rejection can limit the request.
+diff --git a/packages/core/src/session/history.ts b/packages/core/src/session/history.ts
+index aeb7cfc9f81b2d9b27d3e43ff656ed7eb4352a16..45147d075ccc23b4ec4f5f3d69ce1b614c79d449 100644
+--- a/packages/core/src/session/history.ts
++++ b/packages/core/src/session/history.ts
+@@ -31,7 +31,12 @@ export const latestCompaction = Effect.fnUntraced(function* (
+   boundary: Boundary,
+ ) {
+   return yield* db
+-    .select({ seq: SessionMessageTable.seq })
++    .select({
++      seq: SessionMessageTable.seq,
++      // ocelot: see SessionMessage.CompactionCompleted.keep.
++      keepID: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.keep.id')`,
++      keepSeq: sql<number | null>`json_extract(${SessionMessageTable.data}, '$.keep.seq')`,
++    })
+     .from(SessionMessageTable)
+     .where(
+       and(
+@@ -81,21 +86,35 @@ const messageEntries = Effect.fnUntraced(function* (
+   boundary: Boundary,
+ ) {
+   const compaction = yield* latestCompaction(db, sessionID, boundary)
++  const start = compaction ? yield* keptFrom(db, sessionID, compaction) : undefined
+   const rows = yield* db
+     .select()
+     .from(SessionMessageTable)
+     .where(
+       and(
+         eq(SessionMessageTable.session_id, sessionID),
+-        compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
++        start !== undefined ? gte(SessionMessageTable.seq, start) : undefined,
+       ),
+     )
+     .orderBy(asc(SessionMessageTable.seq))
+     .all()
+     .pipe(Effect.orDie)
+-  const entries = yield* Effect.forEach(rows, (row) =>
++  const decoded = yield* Effect.forEach(rows, (row) =>
+     decodeMessageRow(row).pipe(Effect.map((message) => ({ seq: row.seq, message }))),
+   )
++  // ocelot: with kept messages, the compaction moves in front of them. Before it, only those messages count:
++  // earlier compactions are superseded, and instruction updates predate the epoch this compaction started.
++  const head = compaction && start !== compaction.seq ? decoded.find((entry) => entry.seq === compaction.seq) : undefined
++  const entries = head
++    ? [
++        head,
++        ...decoded.filter(
++          (entry) =>
++            entry.seq > compaction!.seq ||
++            (entry.seq < compaction!.seq && entry.message.type !== "compaction" && entry.message.type !== "system"),
++        ),
++      ]
++    : decoded
+   // Re-expansion may cross a native checkpoint whose completion already advanced the instruction
+   // epoch: the baseline supersedes the chronological updates before it. Forks seed their baseline
+   // at sequence 0 but retain parent sequences, so the copied checkpoint still retires them.
+@@ -107,6 +126,39 @@ const messageEntries = Effect.fnUntraced(function* (
+   )
+ })
+ 
++/** ocelot: a message's sequence in its session, for a compaction's `keep`. */
++export const sequenceOf = Effect.fnUntraced(function* (
++  db: DatabaseService,
++  sessionID: SessionSchema.ID,
++  messageID: SessionMessage.ID,
++) {
++  const row = yield* db
++    .select({ seq: SessionMessageTable.seq })
++    .from(SessionMessageTable)
++    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, messageID)))
++    .get()
++    .pipe(Effect.orDie)
++  return row?.seq
++})
++
++/** ocelot: where a history read starts: the compaction itself, or the first message it kept. */
++const keptFrom = Effect.fnUntraced(function* (
++  db: DatabaseService,
++  sessionID: SessionSchema.ID,
++  compaction: { readonly seq: number; readonly keepID: string | null; readonly keepSeq: number | null },
++) {
++  if (compaction.keepID === null || compaction.keepSeq === null) return compaction.seq
++  const kept = yield* db
++    .select({ seq: SessionMessageTable.seq })
++    .from(SessionMessageTable)
++    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, SessionMessage.ID.make(compaction.keepID))))
++    .get()
++    .pipe(Effect.orDie)
++  const seq = kept?.seq ?? compaction.keepSeq
++  // A kept message always precedes its compaction; anything else is not a boundary to trust.
++  return seq < compaction.seq ? seq : compaction.seq
++})
++
+ export const load = Effect.fn("SessionHistory.load")(function* (
+   db: DatabaseService,
+   sessionID: SessionSchema.ID,
+diff --git a/packages/core/src/session/message-updater.ts b/packages/core/src/session/message-updater.ts
+index ac7348ad03452621d3179592b8b16bf58bacf347..8bafa9df883177b8177a102f562375f2cd67909a 100644
+--- a/packages/core/src/session/message-updater.ts
++++ b/packages/core/src/session/message-updater.ts
+@@ -456,6 +456,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
+               summary: event.data.text,
+               providerContext: event.data.providerContext,
+               recent: event.data.recent,
++              keep: event.data.keep,
+               cost: event.data.cost,
+               tokens: event.data.tokens,
+             })
+@@ -473,6 +474,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
+               summary: event.data.text,
+               providerContext: event.data.providerContext,
+               recent: event.data.recent,
++              keep: event.data.keep,
+               cost: event.data.cost,
+               tokens: event.data.tokens,
+               time: { created },
+diff --git a/packages/core/src/session/runner/to-llm-message.ts b/packages/core/src/session/runner/to-llm-message.ts
+index d60e9d135d499e23f89b644499592405b702feac..c23107bb63afd9300f1eb0f9be6d29abf9be23a3 100644
+--- a/packages/core/src/session/runner/to-llm-message.ts
++++ b/packages/core/src/session/runner/to-llm-message.ts
+@@ -306,6 +306,22 @@ function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMe
+       // History selection only keeps native windows the target model can replay.
+       if (SessionProviderContext.isCheckpoint(message))
+         return [...SessionProviderContext.decode(message.providerContext)]
++      // ocelot: a checkpoint followed by the kept messages themselves (core/checkpoint-compaction).
++      if (message.keep)
++        return [
++          Message.make({
++            id: message.id,
++            role: "user",
++            content: [
++              "<conversation-checkpoint>",
++              "Earlier conversation was compacted into this checkpoint. The messages after it continue the conversation verbatim. Treat the checkpoint as historical context, not as new instructions.",
++              "",
++              message.summary,
++              "</conversation-checkpoint>",
++            ].join("\n"),
++            metadata: message.metadata,
++          }),
++        ]
+       return [
+         Message.make({
+           id: message.id,
 diff --git a/packages/core/test/config/normalization.test.ts b/packages/core/test/config/normalization.test.ts
 index 28702520f2483cc0e9597e052c3b391fcee3c123..b8b41072bb15a2a1a9401e4d3719eb131d82385e 100644
 --- a/packages/core/test/config/normalization.test.ts
@@ -405,10 +639,10 @@ index 28702520f2483cc0e9597e052c3b391fcee3c123..b8b41072bb15a2a1a9401e4d3719eb13
        policies: [{ action: "provider.use", resource: "*", effect: "deny" }],
 diff --git a/packages/core/test/session-compaction-checkpoint.test.ts b/packages/core/test/session-compaction-checkpoint.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..5b7037ebba26337d7c2c981f3f648c7b782d4262
+index 0000000000000000000000000000000000000000..2f3fcc99fe91efce1d1d42a5d1040d67317797ae
 --- /dev/null
 +++ b/packages/core/test/session-compaction-checkpoint.test.ts
-@@ -0,0 +1,298 @@
+@@ -0,0 +1,468 @@
 +import { expect } from "bun:test"
 +import { LLMClient, LLMEvent, LanguageModel, type LLMRequest } from "@opencode/ai"
 +import { OpenAIChat } from "@opencode/ai/protocols"
@@ -425,7 +659,8 @@ index 0000000000000000000000000000000000000000..5b7037ebba26337d7c2c981f3f648c7b
 +import { PluginHooks } from "@opencode/core/plugin/hooks"
 +import { SessionProjector } from "@opencode/core/session/projector"
 +import { SessionRunnerModel } from "@opencode/core/session/runner/model"
-+import { SessionTable } from "@opencode/core/session/sql"
++import { SessionMessageTable, SessionTable } from "@opencode/core/session/sql"
++import { toLLMMessages } from "@opencode/core/session/runner/to-llm-message"
 +import { SessionStore } from "@opencode/core/session/store"
 +import { Session } from "@opencode/core/session"
 +import { Project } from "@opencode/core/project"
@@ -433,6 +668,7 @@ index 0000000000000000000000000000000000000000..5b7037ebba26337d7c2c981f3f648c7b
 +import { Agent } from "@opencode/core/agent"
 +import { AbsolutePath } from "@opencode/core/schema"
 +import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
++import { eq } from "drizzle-orm"
 +import { TestClock } from "effect/testing"
 +import { testEffect } from "./lib/effect"
 +
@@ -586,6 +822,39 @@ index 0000000000000000000000000000000000000000..5b7037ebba26337d7c2c981f3f648c7b
 +
 +const last = (request: LLMRequest | undefined) => JSON.stringify(request?.messages.at(-1))
 +
++const encodeMessage = Schema.encodeSync(SessionMessage.Info)
++/** Stores messages as a session's history (sequences 1…n), as the projector would have. */
++const seed = (sessionID: Session.ID, messages: readonly SessionMessage.Info[]) =>
++  Effect.gen(function* () {
++    const db = (yield* Database.Service).db
++    yield* db
++      .insert(SessionMessageTable)
++      .values(
++        messages.map((message, index) => {
++          const encoded = encodeMessage(message)
++          const { id, type, ...data } = encoded
++          return {
++            id: SessionMessage.ID.make(id),
++            session_id: sessionID,
++            type,
++            seq: index + 1,
++            time_created: encoded.time.created,
++            data,
++          }
++        }),
++      )
++      .run()
++      .pipe(Effect.orDie)
++    yield* Bus.reserveSequence(db, sessionID, messages.length)
++  })
++const context = (id: Session.ID) =>
++  Effect.gen(function* () {
++    const store = yield* SessionStore.Service
++    return yield* store.context(id)
++  })
++const describe = (message: SessionMessage.Info) =>
++  message.type === "user" ? message.text : message.type === "assistant" ? JSON.stringify(message.content) : message.type
++
 +it.effect("checkpoint compacts at 90% of the window, capped at 540k tokens", () =>
 +  Effect.gen(function* () {
 +    yield* configure({})
@@ -633,6 +902,8 @@ index 0000000000000000000000000000000000000000..5b7037ebba26337d7c2c981f3f648c7b
 +    expect(last(requests[0])).toContain('from the user message starting \\"Second request: now test the thing\\"')
 +    const checkpoint = yield* stored(session.id)
 +    expect(checkpoint?.summary).toBe(CHECKPOINT)
++    // These messages were never stored, so the kept part falls back to upstream's text.
++    expect(checkpoint?.keep).toBeUndefined()
 +    expect(checkpoint?.recent).toContain("[User]: Second request: now test the thing")
 +  }),
 +)
@@ -707,6 +978,139 @@ index 0000000000000000000000000000000000000000..5b7037ebba26337d7c2c981f3f648c7b
 +    expect(last(requests[0])).toContain("Summarize only what")
 +  }),
 +)
++
++it.effect("checkpoint keeps the newest messages as messages, with the checkpoint in front", () =>
++  Effect.gen(function* () {
++    yield* configure({ keep: 10 })
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_keep"))
++    const messages = conversation()
++    yield* seed(session.id, messages)
++    script = [good]
++
++    expect(yield* compactManually(session, messages)).toEqual({ status: "completed" })
++    const checkpoint = yield* stored(session.id)
++    expect(checkpoint?.recent).toBe("")
++    expect(checkpoint?.keep).toEqual({ id: messages[2]!.id, seq: 3 })
++    const history = yield* context(session.id)
++    expect(history.map(describe)).toEqual([
++      "compaction",
++      "Second request: now test the thing",
++      JSON.stringify(messages[3]!.type === "assistant" ? messages[3].content : []),
++    ])
++    // The model sees the checkpoint, then the kept messages themselves.
++    const sent = toLLMMessages(history, { id: "checkpoint-model", providerID: "test" } as never)
++    expect(JSON.stringify(sent[0])).toContain("continue the conversation verbatim")
++    expect(JSON.stringify(sent[0])).not.toContain("recent-context")
++    expect(JSON.stringify(sent[0])).toContain("## Goal")
++    expect(sent.map((message) => message.role)).toEqual(["user", "user", "assistant"])
++  }),
++)
++
++it.effect("kept messages do not make the next step compact again with their old usage", () =>
++  Effect.gen(function* () {
++    yield* configure({ keep: 10 })
++    const compaction = yield* SessionCompaction.Service
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_stale_usage"))
++    // The kept reply measured a nearly full window before the compaction.
++    const messages = [...conversation().slice(0, 3), assistant("Tests are running.", 190_000)]
++    yield* seed(session.id, messages)
++    script = [good]
++    expect(yield* compactManually(session, messages)).toEqual({ status: "completed" })
++
++    requests = []
++    const after = loaded(session, yield* context(session.id))
++    expect(SessionCompaction.estimateContext(after)).toBeLessThan(10_000)
++    expect(yield* compaction.compact({ reason: "auto", context: after })).toEqual({ status: "skipped" })
++    expect(requests).toHaveLength(0)
++  }),
++)
++
++it.effect("kept history leaves out earlier checkpoints and superseded instruction updates", () =>
++  Effect.gen(function* () {
++    yield* configure({ keep: 50 })
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_supersede"))
++    const [first, reply, second, done] = conversation()
++    const big = assistant(`Long step: ${"output ".repeat(600)}`)
++    const earlier = Schema.decodeUnknownSync(SessionMessage.CompactionCompleted)({
++      id: SessionMessage.ID.create(),
++      type: "compaction",
++      status: "completed",
++      reason: "auto",
++      summary: "## Goal\n- earlier",
++      recent: "",
++      keep: { id: second!.id, seq: 3 },
++      time: { created: 0 },
++    })
++    const instructions = SessionMessage.System.make({
++      id: SessionMessage.ID.create(),
++      type: "system",
++      text: "Old instructions",
++      time: { created: DateTime.makeUnsafe(0) },
++    })
++    // An earlier checkpoint (sequence 5) kept `second` and `big`; an instruction update and a reply followed.
++    yield* seed(session.id, [first!, reply!, second!, big, earlier, instructions, done!])
++    const live = yield* context(session.id)
++    expect(live.map(describe)).toEqual(["compaction", describe(second!), describe(big), "system", describe(done!)])
++    script = [good]
++    // The cut lands on `big`, inside the earlier checkpoint's kept part, so the read crosses that checkpoint's row.
++    expect(yield* compactManually(session, live)).toEqual({ status: "completed" })
++    expect((yield* stored(session.id))?.keep).toEqual({ id: big.id, seq: 4 })
++    expect((yield* context(session.id)).map(describe)).toEqual(["compaction", describe(big), describe(done!)])
++  }),
++)
++
++it.effect("a kept boundary survives renumbering by id and id rewrites by sequence", () =>
++  Effect.gen(function* () {
++    yield* configure({ keep: 10 })
++    const db = (yield* Database.Service).db
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_boundary"))
++    const messages = conversation()
++    yield* seed(session.id, messages)
++    script = [good]
++    expect(yield* compactManually(session, messages)).toEqual({ status: "completed" })
++    const expected = (yield* context(session.id)).map(describe)
++    const row = yield* db
++      .select()
++      .from(SessionMessageTable)
++      .where(eq(SessionMessageTable.type, "compaction"))
++      .all()
++      .pipe(Effect.orDie)
++    const compaction = row.find((item) => item.session_id === session.id)!
++    const rewrite = (keep: unknown) =>
++      db
++        .update(SessionMessageTable)
++        .set({ data: { ...compaction.data, keep } as typeof compaction.data })
++        .where(eq(SessionMessageTable.id, compaction.id))
++        .run()
++        .pipe(Effect.orDie)
++
++    // A fork rewrote the kept message's id; its sequence still finds it.
++    yield* rewrite({ id: "msg_rewritten_by_fork", seq: 3 })
++    expect((yield* context(session.id)).map(describe)).toEqual(expected)
++    // An import renumbered sequences; the id still finds it.
++    yield* rewrite({ id: messages[2]!.id, seq: 99 })
++    expect((yield* context(session.id)).map(describe)).toEqual(expected)
++  }),
++)
++
++it.effect("a single long run is cut between its steps, not kept whole", () =>
++  Effect.gen(function* () {
++    yield* configure({ keep: 1_000 })
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_long_run"))
++    const step = (index: number) => assistant(`Step ${index}: ${"output ".repeat(600)}`)
++    const messages = [user("Earlier request"), assistant("Done."), user("Run the long job"), ...[1, 2, 3, 4, 5, 6].map(step)]
++    yield* seed(session.id, messages)
++    script = [good]
++    requests = []
++
++    expect(yield* compactManually(session, messages)).toEqual({ status: "completed" })
++    const history = (yield* context(session.id)).map(describe)
++    expect(history[0]).toBe("compaction")
++    expect(history.length).toBeLessThan(messages.length)
++    expect(history.slice(1).every((item) => item.includes("Step "))).toBe(true)
++    expect(last(requests[0])).toContain("from your reply starting")
++  }),
++)
 diff --git a/packages/schema/src/config/compaction.ts b/packages/schema/src/config/compaction.ts
 index 7661e57d2a012bb64da00c9c603888e677bb0431..63c9cc613ad95c7f7cd0dc1e5d4435a300c39fac 100644
 --- a/packages/schema/src/config/compaction.ts
@@ -731,3 +1135,32 @@ index 7661e57d2a012bb64da00c9c603888e677bb0431..63c9cc613ad95c7f7cd0dc1e5d4435a3
 +  /** Milliseconds without any output from the summary request before it is retried; 0 disables. */
 +  timeout: NonNegativeInt.pipe(optional),
  }) {}
+diff --git a/packages/schema/src/session-event.ts b/packages/schema/src/session-event.ts
+index bbba8a85e93567045e57ee0fc0c598de8c1b95f5..bfca303a6876f5c17c8f36fb899c0403795582a2 100644
+--- a/packages/schema/src/session-event.ts
++++ b/packages/schema/src/session-event.ts
+@@ -638,6 +638,7 @@ export namespace Compaction {
+       providerContext: SessionMessage.CompactionCompleted.fields.providerContext,
+       text: Schema.String,
+       recent: Schema.String,
++      keep: SessionMessage.CompactionCompleted.fields.keep,
+       // Repeats the internal `session.usage.recorded` figures: that event never reaches clients, and it
+       // stays the accounting source for session totals and stats.
+       cost: SessionMessage.CompactionCompleted.fields.cost,
+diff --git a/packages/schema/src/session-message.ts b/packages/schema/src/session-message.ts
+index d37cd4a049e139b0f3afa970bb88c5179461cbc8..5ae9275fd79c4f3b9549164bddf7970eba151f00 100644
+--- a/packages/schema/src/session-message.ts
++++ b/packages/schema/src/session-message.ts
+@@ -264,6 +264,12 @@ export const CompactionCompleted = Schema.Struct({
+   summary: Schema.String,
+   recent: Schema.String,
+   providerContext: SessionProviderContext.Info.pipe(optional),
++  /**
++   * ocelot (core/checkpoint-compaction): the first message kept verbatim after the summary, instead of `recent`
++   * text. History reads from it with this compaction moved in front. Both identities: forks rewrite message ids
++   * but keep sequences, imports renumber sequences but keep ids.
++   */
++  keep: Schema.Struct({ id: ID, seq: Schema.Int }).pipe(optional),
+   ...CompactionUsage,
+ }).annotate({ identifier: "Session.Message.Compaction.Completed" })
+ 
