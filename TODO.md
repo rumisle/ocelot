@@ -46,8 +46,8 @@ Open:
         new UI after the restart when the composer is empty.
   - [ ] A session waiting on a permission/question counts as running, so it holds the restart back
         until answered. Decide whether that should count as idle (check that resume restores the prompt).
-  - [ ] The restarted server inherits the waiter's environment (the old server's, or the shell that
-        ran install.sh), not a fresh login shell as the systemd unit gives.
+      Accepted: the restarted server inherits the waiter's environment (the old server's, or the
+      shell that ran install.sh), not a fresh login shell as the systemd unit gives.
 
 ## Testing
 
