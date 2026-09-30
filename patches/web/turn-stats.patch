@@ -54,7 +54,7 @@ index 73552e6e47dfd01e9cd1f008b7c5580e7034c3d6..97427b5bf9705331daf1fd6cf98e1a0b
          )}
        </Match>
 diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
-index ee7b53c2b4daeed32dedea8bc543eafbd5cb8825..16a5c638663100e720df5069ca2ae7e4a568b334 100644
+index ee7b53c2b4daeed32dedea8bc543eafbd5cb8825..c965aeb1efe5bcfcc1ab358acaad8458c669fec3 100644
 --- a/packages/session-ui/src/message/message-content.tsx
 +++ b/packages/session-ui/src/message/message-content.tsx
 @@ -451,6 +451,7 @@ export function AssistantTextContent(props: {
@@ -65,27 +65,65 @@ index ee7b53c2b4daeed32dedea8bc543eafbd5cb8825..16a5c638663100e720df5069ca2ae7e4
  }) {
    const i18n = useI18n()
    const numfmt = createMemo(() => new Intl.NumberFormat(i18n.locale()))
-@@ -477,8 +478,14 @@ export function AssistantTextContent(props: {
+@@ -477,8 +478,15 @@ export function AssistantTextContent(props: {
      })
    })
    const meta = createMemo(() => {
 +    // ocelot: turn stats, once the turn is done (when the duration shows).
 +    const stats = duration() ? props.turnStats : undefined
      return [
++      stats?.ended !== undefined ? formatEnded(stats.ended, i18n.locale()) : "",
        duration(),
 +      stats?.ttft !== undefined ? `ttft ${formatLatency(stats.ttft)}` : "",
 +      stats?.tps !== undefined ? `${Math.round(stats.tps)} t/s` : "",
-+      stats?.cacheHit !== undefined ? `${Math.round(stats.cacheHit * 100)}% cache` : "",
++      stats?.cacheHit !== undefined ? `CH${Math.round(stats.cacheHit * 100)}%` : "",
 +      stats && stats.cost > 0 ? formatCost(stats.cost) : "",
        interrupted() ? i18n.t("ui.message.interrupted") : "",
      ]
        .filter(Boolean)
-@@ -522,6 +529,19 @@ export function AssistantTextContent(props: {
+@@ -511,7 +519,15 @@ export function AssistantTextContent(props: {
+               aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
+             />
+             <Show when={meta()}>
+-              <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
++              <span
++                data-slot="text-part-meta"
++                class="text-12-regular text-text-weak cursor-default"
++                title={
++                  duration() && props.turnStats?.ended !== undefined
++                    ? formatEndedFull(props.turnStats.ended)
++                    : undefined
++                }
++              >
+                 {meta()}
+               </span>
+             </Show>
+@@ -522,6 +538,39 @@ export function AssistantTextContent(props: {
    )
  }
  
 +/** ocelot: per-turn numbers shown next to the duration. */
-+export type TurnStats = { cost: number; cacheHit?: number; ttft?: number; tps?: number }
++export type TurnStats = { cost: number; ended?: number; cacheHit?: number; ttft?: number; tps?: number }
++
++/** When the turn ended: the time today, the date too on other days, the year too in other years. */
++function formatEnded(ms: number, locale: string) {
++  const date = new Date(ms)
++  const now = new Date()
++  const time = date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
++  if (date.toDateString() === now.toDateString()) return time
++  const day = date.toLocaleDateString(locale, {
++    month: "short",
++    day: "numeric",
++    year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
++  })
++  return `${day} ${time}`
++}
++
++function formatEndedFull(ms: number) {
++  const date = new Date(ms)
++  const pad = (value: number) => String(value).padStart(2, "0")
++  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
++}
 +
 +function formatLatency(ms: number) {
 +  if (ms < 1000) return `${Math.round(ms)}ms`
@@ -101,10 +139,10 @@ index ee7b53c2b4daeed32dedea8bc543eafbd5cb8825..16a5c638663100e720df5069ca2ae7e4
    id: string
    content: SessionMessageAssistantReasoning
 diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
-index ee677260e686b1cdb49b0604fac5631db903b10c..684d65cbd49254fa88199a1db764ddd5f9eb00ff 100644
+index ee677260e686b1cdb49b0604fac5631db903b10c..ce8b9034ce020bfe47a4be11fb53d576e431461d 100644
 --- a/packages/session-ui/src/timeline/session-timeline-row.tsx
 +++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
-@@ -104,6 +104,34 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -104,6 +104,38 @@ export function createSessionTimelineRowRenderer(input: {
      if (completed === undefined || completed < user.time.created) return undefined
      return completed - user.time.created
    }
@@ -129,8 +167,12 @@ index ee677260e686b1cdb49b0604fac5631db903b10c..684d65cbd49254fa88199a1db764ddd5
 +    // Providers sometimes deliver a short reply in one burst (97 tokens in 3ms), so a
 +    // window under a second says nothing about speed; leave t/s out then.
 +    const window = output !== undefined && end !== undefined ? end - output : 0
++    let ended: number | undefined
++    for (const message of messages)
++      if (message.time.completed !== undefined) ended = Math.max(ended ?? 0, message.time.completed)
 +    return {
 +      cost,
++      ended,
 +      cacheHit: prompt > 0 ? cached / prompt : undefined,
 +      ttft: last && output !== undefined ? output - last.time.created : undefined,
 +      tps: window >= 1000 && generated > 0 ? generated / (window / 1000) : undefined,
@@ -139,7 +181,7 @@ index ee677260e686b1cdb49b0604fac5631db903b10c..684d65cbd49254fa88199a1db764ddd5
    const copyContentID = (messageID: string) => {
      if (workingTurn(messageID)) return null
      const message = input.projection
-@@ -276,6 +304,7 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -276,6 +308,7 @@ export function createSessionTimelineRowRenderer(input: {
                  contentID={ref()!.partID}
                  showAssistantCopyPartID={copyContentID(row().userMessageID)}
                  turnDurationMs={duration(row().userMessageID)}

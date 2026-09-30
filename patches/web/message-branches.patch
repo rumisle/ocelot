@@ -165,7 +165,7 @@ index 97427b5bf9705331daf1fd6cf98e1a0b18d84576..c33e862acac09db7dc532688f42bc8d0
  export { currentContentDefaultOpen } from "./current-tool-state"
  
 diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
-index 16a5c638663100e720df5069ca2ae7e4a568b334..f77588ce7f6a1ddd771355db53914da583b6be62 100644
+index c965aeb1efe5bcfcc1ab358acaad8458c669fec3..00f4c9bd7b5a7d6d077573746d1e26251d603419 100644
 --- a/packages/session-ui/src/message/message-content.tsx
 +++ b/packages/session-ui/src/message/message-content.tsx
 @@ -54,7 +54,7 @@ export async function writeClipboard(text: string): Promise<boolean> {
