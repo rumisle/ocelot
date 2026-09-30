@@ -160,8 +160,20 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          boundary. Needs a repro.
    - [ ] Edit feels slow: the web path interrupts, stages, then lists and cancels the inbox
          serially. Measure; make the UI optimistic.
-3. **Compaction** that works automatically end to end. opencode-vcc is not enough. Decide
-   what "works" means first (when it triggers, what survives, whether the cache is reused).
+3. **Compaction** that works automatically end to end. opencode-vcc is not enough.
+   - [x] Step 1: patch `core/checkpoint-compaction`, opt-in with `"compaction": { "strategy": "checkpoint" }`.
+         Compacts at min(90% of the window, 540k) (`threshold.ratio` / `threshold.tokens`). The checkpoint is a
+         follow-up to the live context (whole prefix is a cache read; tools and tool_choice unchanged), with pi's
+         sections plus OpenCode's rules and a "Running" section, rewritten fresh each time. One reminder for a
+         reply that calls a tool or skips the template, then the summary strategy as fallback; 5 min idle timeout
+         (`timeout`, ms) retried under the session retry policy; overflow recovery takes the summary path.
+         Config goes through `core/src/config/normalize.ts`, which copies known fields: new ones must be added there.
+   - [ ] Step 2: keep the recent turns as real messages (pi's firstKeptEntryId), not text. Audit (2026-10-01):
+         store the cut as a `seq` (forks rewrite message ids), ignore pre-compaction usage when measuring the
+         context (else it compacts again at once), drop instruction updates older than the new epoch, add the
+         field to transfer.ts. Editing a kept message undoes the compaction (then it compacts again).
+   - [ ] Remove opencode-vcc from the config once step 1 is in use (its compaction hook result would win).
+   - Note: 6 "config plugin reloads" tests in packages/core fail on this machine on plain v2.0.19 too.
 4. **Background shell considered harmful.** How it works today (`tool/plugin/shell.ts`,
    `job.ts`): `shell {background: true}` returns at once; on completion the output is posted
    as a *synthetic* inbox item with delivery `steer`, which reaches the model as a **user-role

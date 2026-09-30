@@ -5,7 +5,9 @@
 // stats have realistic numbers. The newest user text scripts it:
 //   "LINES n"  → a numbered list of n lines (long output, for scrolling)
 //   "SHELL x"  → calls the shell tool with command x first, then answers
+//   a compaction request (checkpoint or summary prompt) → a filled-in template
 //   anything else → a short paragraph
+// Usage reports the request's size (about 4 characters a token), mostly as cache reads.
 import { mkdirSync, appendFileSync } from "node:fs"
 
 const PORT = Number(process.env.FAKE_PORT ?? 4851)
@@ -15,6 +17,12 @@ const LOG = process.env.FAKE_LOG
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const event = (e: any) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`
+
+function prompt(body: any) {
+  const tokens = Math.max(100, Math.ceil(JSON.stringify(body).length / 4))
+  const read = Math.floor(tokens * 0.9)
+  return { input_tokens: 40, cache_read_input_tokens: read, cache_creation_input_tokens: tokens - read - 40, output_tokens: 1 }
+}
 
 function newestUserText(body: any): { text: string; afterTool: boolean } {
   for (const message of [...(body.messages ?? [])].reverse()) {
@@ -28,6 +36,8 @@ function newestUserText(body: any): { text: string; afterTool: boolean } {
 }
 
 function reply(text: string) {
+  if (text.includes("This is not a new task")) return "## Goal\n- Fake goal.\n\n## Constraints & Preferences\n- (none)\n\n## Progress\n### Done\n- [x] Fake work\n\n## Running\n- (none)\n\n## Key Decisions\n- **Fake**: testing\n\n## Next Steps\n1. Continue\n\n## Open Requests\n- (none)\n\n## Relevant Files\n- (none)\n\n## Critical Context\n- (none)"
+  if (text.includes("Summarize only what")) return "## Objective\n- Fake summary."
   const lines = text.match(/LINES (\d+)/)
   if (lines) return Array.from({ length: Number(lines[1]) }, (_, i) => `${i + 1}. Line number ${i + 1} of the list.`).join("\n")
   return "This is a fake reply from the test provider. It streams a few words at a time so the UI can be checked with realistic timings, and it reports cache reads so the turn stats have something to show."
@@ -40,13 +50,13 @@ Bun.serve({
   async fetch(req) {
     if (!new URL(req.url).pathname.endsWith("/messages")) return new Response("not found", { status: 404 })
     const body = await req.json()
-    if (LOG) appendFileSync(LOG, JSON.stringify({ time: Date.now(), messages: body.messages?.length }) + "\n")
+    if (LOG) appendFileSync(LOG, JSON.stringify({ time: Date.now(), messages: body.messages?.length, tokens: prompt(body).cache_read_input_tokens + prompt(body).cache_creation_input_tokens + 40, last: newestUserText(body).text.slice(0, 40) }) + "\n")
     const { text, afterTool } = newestUserText(body)
     const shell = !afterTool && text.match(/SHELL (.+)/)
     const stream = new ReadableStream({
       async start(controller) {
         const send = (e: any) => controller.enqueue(new TextEncoder().encode(event(e)))
-        send({ type: "message_start", message: { id: `msg_${Date.now()}`, type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, usage: { input_tokens: 40, cache_read_input_tokens: 9600, cache_creation_input_tokens: 360, output_tokens: 1 } } })
+        send({ type: "message_start", message: { id: `msg_${Date.now()}`, type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, usage: prompt(body) } })
         await sleep(FIRST_MS)
         let output = 0
         if (shell) {

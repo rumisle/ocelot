@@ -1,0 +1,733 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Thu, 1 Oct 2026 01:13:40 +0800
+Subject: core/compaction: checkpoint strategy, written as a follow-up to the
+ live context
+
+`compaction.strategy: "checkpoint"` (default "summary", upstream's) changes local compaction:
+
+- When: at 90% of the window, but never above 540k tokens (`compaction.threshold.ratio` /
+  `.tokens`), and never above the summary strategy's ceiling, which keeps room for the reply.
+- How: the live context goes out exactly as the last step sent it, with the checkpoint prompt
+  appended as a user message, so the whole prefix is a cache read. Tools and tool_choice stay as
+  they are, since changing them would invalidate the cached messages. Upstream sends only the
+  older part, which ends where no request put a cache breakpoint.
+- What: pi's checkpoint sections (goal, constraints, progress, key decisions, next steps,
+  critical context) with OpenCode's rules (no AGENTS.md or environment, at most 15 relevant
+  files, open requests in the user's words, git state), plus "Running" for work still going
+  outside the conversation. Every compaction writes a fresh checkpoint: an earlier one is
+  history to carry forward only while still true, never a draft to update.
+- Guards: a reply that calls a tool, lacks the template (6 of the 9 sections), or is too short
+  gets one reminder; a second failure falls back to the summary strategy. A response silent for
+  `compaction.timeout` ms (default 300000, pi's HTTP idle timeout; 0 disables) is retried under
+  the session's retry policy. Overflow recovery always takes the summary path, since the live
+  context no longer fits.
+
+The recent part is still kept as upstream keeps it (text beside the summary); the prompt names
+where it starts.
+
+Ocelot-Patch: core/checkpoint-compaction
+
+diff --git a/packages/core/src/config/normalize.ts b/packages/core/src/config/normalize.ts
+index 2805cc04cd31b1ab024f3078975662dfc32104a2..8b1126314ac005deadf97290cf82aab9e15e1260 100644
+--- a/packages/core/src/config/normalize.ts
++++ b/packages/core/src/config/normalize.ts
+@@ -371,6 +371,12 @@ function normalizeCompaction(
+     : undefined
+   const buffer = prefer(legacyBuffer, nativeBuffer, ["compaction", "buffer"], diagnostics)
+   if (buffer !== undefined) result.buffer = buffer
++  // ocelot: the checkpoint strategy's settings (patch core/checkpoint-compaction).
++  for (const key of ["strategy", "threshold", "timeout"] as const) {
++    if (!own(input.compaction, key)) continue
++    const value = decodeEncoded(ConfigCompaction.Info.fields[key], input.compaction[key], ["compaction", key], diagnostics)
++    if (value !== undefined) result[key] = value
++  }
+   if (Object.keys(result).length || !Object.keys(input.compaction).length) encoded.compaction = result
+ }
+ 
+diff --git a/packages/core/src/config/plugin/compaction.ts b/packages/core/src/config/plugin/compaction.ts
+index 7080d88836c54597c11aa2fd36fa1bd28eb96cee..050f9e38520836197f50bd6cdecd3152a5ef57d4 100644
+--- a/packages/core/src/config/plugin/compaction.ts
++++ b/packages/core/src/config/plugin/compaction.ts
+@@ -19,6 +19,14 @@ export const Plugin = define({
+           ...(entry.info.compaction.auto === undefined ? {} : { auto: entry.info.compaction.auto }),
+           ...(entry.info.compaction.buffer === undefined ? {} : { buffer: entry.info.compaction.buffer }),
+           ...(entry.info.compaction.keep?.tokens === undefined ? {} : { keep: entry.info.compaction.keep.tokens }),
++          ...(entry.info.compaction.strategy === undefined ? {} : { strategy: entry.info.compaction.strategy }),
++          ...(entry.info.compaction.threshold?.ratio === undefined
++            ? {}
++            : { ratio: entry.info.compaction.threshold.ratio }),
++          ...(entry.info.compaction.threshold?.tokens === undefined
++            ? {}
++            : { max: entry.info.compaction.threshold.tokens }),
++          ...(entry.info.compaction.timeout === undefined ? {} : { timeout: entry.info.compaction.timeout }),
+         })
+       }
+     })
+diff --git a/packages/core/src/session/compaction.ts b/packages/core/src/session/compaction.ts
+index baa80a857fbefa912c0ef54437b05cecb93b9c9c..15db7f1ee6c88403046f0aa91cafd9fe3112a057 100644
+--- a/packages/core/src/session/compaction.ts
++++ b/packages/core/src/session/compaction.ts
+@@ -11,6 +11,7 @@ import {
+   LLMRequest,
+   Message,
+   type ToolEntry,
++  TransportError,
+   UnknownProviderError,
+   type Usage,
+ } from "@opencode/ai"
+@@ -18,7 +19,7 @@ import type { StreamOptions } from "@opencode/ai/route"
+ import type { SessionCompactionResult } from "@opencode/plugin/effect/session"
+ import type { SessionError } from "@opencode/schema/session-error"
+ import { makeLocationNode } from "@opencode/util/effect/app-node"
+-import { Context, Effect, Layer, Result, Stream } from "effect"
++import { Context, Duration, Effect, Layer, Result, Stream } from "effect"
+ import { Bus } from "../bus.js"
+ import { Database } from "../database/database.js"
+ import { llmClient } from "../effect/app-node-platform.js"
+@@ -42,6 +43,14 @@ export type Settings = {
+   buffer?: number
+   /** Tokens of recent conversation kept verbatim beside the summary. */
+   keep: number
++  // ocelot: the checkpoint strategy (see `checkpoint`). The rest only apply to it.
++  strategy?: "summary" | "checkpoint"
++  /** Compact at this share of the window... */
++  ratio?: number
++  /** ...or at this many tokens, whichever comes first. */
++  max?: number
++  /** Milliseconds without any output from the summary request before it is retried; 0 disables. */
++  timeout?: number
+ }
+ 
+ export type Editor = {
+@@ -86,6 +95,8 @@ type Prepared = Effect.Success<ReturnType<SessionModelRequest.Interface["compact
+ type Streamed = {
+   readonly text: string
+   readonly providerState?: SessionMessage.ProviderState
++  /** ocelot: the reply called a tool, which a checkpoint must not do. */
++  readonly toolCall?: boolean
+ }
+ 
+ const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }
+@@ -98,6 +109,15 @@ const UNKNOWN_WINDOW = 200_000
+ const TOOL_OUTPUT_MAX_CHARS = 1_250
+ const IMAGE_TOKEN_ESTIMATE = 1_500
+ const PDF_TOKEN_ESTIMATE = 2_000
++// ocelot: checkpoint strategy defaults. 90% of the window, but never more than 540k: past that, long-context
++// quality and per-step cost argue for compacting even when the window is larger. Five minutes of silence is pi's
++// HTTP idle timeout; a long silent think on a big context stays well below it.
++const CHECKPOINT_RATIO = 0.9
++const CHECKPOINT_MAX = 540_000
++const CHECKPOINT_IDLE_MS = 300_000
++/** Of the checkpoint's `##` sections, this many must be present; a model may leave out an empty one. */
++const CHECKPOINT_MIN_SECTIONS = 6
++const CHECKPOINT_MIN_CHARS = 200
+ 
+ const SUMMARY_TEMPLATE = `You MUST use this format for your response (you may omit sections that aren't applicable). Do not include the <template> tags in your response.
+ <template>
+@@ -203,12 +223,13 @@ export const layer = Layer.effect(
+ 
+       // Only the user compacts when automatic compaction is off, overflow included.
+       if (trigger.reason !== "manual" && !settings.auto) return { status: "skipped" }
+-      const ceiling = calculateCeiling(context.model.limit, settings.buffer)
++      const checkpointing = settings.strategy === "checkpoint" && context.model.compaction?.type !== "native"
++      const ceilingOf = (limit: SessionContext.Loaded["model"]["limit"]) =>
++        checkpointing ? checkpointCeiling(limit, settings) : calculateCeiling(limit, settings.buffer)
++      const ceiling = ceilingOf(context.model.limit)
+       if (trigger.reason === "auto" && !due(context, ceiling)) return { status: "skipped" }
+       // An unknown window never triggers auto compaction, but the compaction request still needs a size to aim for.
+-      const cap = Number.isFinite(ceiling)
+-        ? ceiling
+-        : calculateCeiling({ ...context.model.limit, context: UNKNOWN_WINDOW }, settings.buffer)
++      const cap = Number.isFinite(ceiling) ? ceiling : ceilingOf({ ...context.model.limit, context: UNKNOWN_WINDOW })
+       // The provider just rejected this context, so the estimate ran low; the first attempt already aims below it.
+       const budget =
+         trigger.reason === "overflow" ? Math.min(cap, Math.floor(estimateContext(context) * SHRINK_STEPS[0])) : cap
+@@ -216,7 +237,16 @@ export const layer = Layer.effect(
+       const compaction =
+         context.model.compaction?.type === "native"
+           ? compactNatively(trigger, budget, settings.keep)
+-          : summarize(trigger, budget, settings.keep)
++          : // An overflow means the live context can no longer be sent as it is, so it takes the summary path.
++            checkpointing && trigger.reason !== "overflow"
++            ? checkpoint(trigger, settings).pipe(
++                Effect.catch((failure) =>
++                  Effect.logWarning("checkpoint failed; falling back to a summary", { error: failure.error }).pipe(
++                    Effect.andThen(summarize(trigger, budget, settings.keep, true)),
++                  ),
++                ),
++              )
++            : summarize(trigger, budget, settings.keep)
+       return yield* compaction.pipe(
+         Effect.matchEffect({
+           onSuccess: (result) => publish(trigger, result),
+@@ -259,6 +289,7 @@ export const layer = Layer.effect(
+       trigger: Trigger,
+       budget: number,
+       keep: number,
++      announced = false,
+     ): Effect.fn.Return<Result, Failure> {
+       const context = trigger.context
+       const split = splitConversation(context.messages, keep)
+@@ -292,7 +323,58 @@ export const layer = Layer.effect(
+         })
+ 
+       const overhead = Token.estimate(prompt) + Token.estimate(NUDGE)
+-      return yield* deliver(trigger, prepared, split.recent, budget - overhead, send)
++      return yield* deliver(trigger, prepared, split.recent, budget - overhead, send, announced)
++    })
++
++    /**
++     * ocelot: the checkpoint strategy. The live context goes out exactly as the last step sent it, with the
++     * checkpoint prompt appended as a user message, so the whole prefix is a cache read. Hooks see the same request
++     * as a step's (compaction hooks mirror context hooks), and tools stay defined because changing them, or
++     * tool_choice, would invalidate the cached messages. The reply must be the checkpoint: a tool call, a missing
++     * template, or a reply too short to be one gets one reminder, then the compaction falls back to `summarize`.
++     *
++     *   [system][…whole context…][checkpoint prompt]  →  [S + "recent"]
++     *
++     * The recent part is kept as upstream keeps it, and the checkpoint prompt names where it starts.
++     */
++    const checkpoint = Effect.fnUntraced(function* (
++      trigger: Trigger,
++      settings: Settings,
++    ): Effect.fn.Return<Result, Failure> {
++      const context = trigger.context
++      const split = splitConversation(context.messages, settings.keep)
++      if (!split) return yield* Effect.fail(NOTHING_TO_COMPACT)
++      const prompt = buildCheckpointPrompt(split.recent)
++      const size = estimateContext(context)
++      const prepared = yield* prepare(context, context.messages, size)
++      const idle = settings.timeout ?? CHECKPOINT_IDLE_MS
++
++      const send = (request: LLMRequest) =>
++        Effect.gen(function* () {
++          const prompted = LLMRequest.update(request, { messages: [...request.messages, Message.user(prompt)] })
++          const reply = yield* stream(context, prompted, prepared.options, idle)
++          if (isCheckpoint(reply)) return { ...reply, recent: split.recent }
++
++          const nudged = LLMRequest.update(prompted, {
++            messages: [...prompted.messages, Message.user(CHECKPOINT_NUDGE)],
++          })
++          const retry = yield* stream(context, nudged, prepared.options, idle)
++          if (isCheckpoint(retry)) return { ...retry, recent: split.recent }
++          return yield* Effect.fail<Failure>({
++            error: {
++              type: "compaction.failed",
++              message: retry.toolCall
++                ? "The checkpoint request called a tool instead of writing the checkpoint"
++                : "Compaction summary did not match the required template",
++            },
++          })
++        })
++
++      // Room for the whole context: the window less the checkpoint's own output. A context that does not fit is
++      // flattened by `deliver` like a summary's, which gives up the cache but still compacts.
++      const window = context.model.limit.input || context.model.limit.context || UNKNOWN_WINDOW
++      const target = Math.max(size, window - RESERVE_MIN) - Token.estimate(prompt) - Token.estimate(CHECKPOINT_NUDGE)
++      return yield* deliver(trigger, prepared, split.recent, target, send)
+     })
+ 
+     /**
+@@ -373,10 +455,11 @@ export const layer = Layer.effect(
+       recent: string,
+       target: number,
+       send: (request: LLMRequest) => Effect.Effect<Result, AIError | Failure>,
++      announced = false,
+     ): Effect.fn.Return<Result, Failure> {
+       const context = trigger.context
+       // The runner opened the manual compaction's message when it delivered the `/compact` item.
+-      if (trigger.reason !== "manual") {
++      if (trigger.reason !== "manual" && !announced) {
+         yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: context.session.id, reason: "auto", recent })
+       }
+       if (prepared.event.result) return yield* fromHook(context, prepared.event.result, recent)
+@@ -489,12 +572,29 @@ export const layer = Layer.effect(
+       })
+     }
+ 
+-    const stream = (context: SessionContext.Loaded, request: LLMRequest, options: StreamOptions) => {
++    const stream = (context: SessionContext.Loaded, request: LLMRequest, options: StreamOptions, idle = 0) => {
+       const sessionID = context.session.id
+       const metadataKey = context.model.model.route.providerMetadataKey ?? context.model.model.provider
+       const unusable = (error: SessionError.Error) => Effect.fail<Failure>({ error })
+ 
+       return llm.stream(request, options).pipe(
++        // ocelot: a stalled response counts as a dropped connection, which the retry policy retries.
++        idle > 0
++          ? Stream.timeoutOrElse({
++              duration: Duration.millis(idle),
++              orElse: () =>
++                Stream.fail(
++                  new AIError({
++                    reason: new TransportError({
++                      message: `No response from the provider for ${Math.round(idle / 1000)}s`,
++                      transport: "http",
++                      operation: "read",
++                      code: "Timeout",
++                    }),
++                  }),
++                ),
++            })
++          : (events) => events,
+         Stream.runFoldEffect(
+           (): Streamed => ({ text: "" }),
+           (streamed, event): Effect.Effect<Streamed, AIError | Failure> => {
+@@ -508,6 +608,8 @@ export const layer = Layer.effect(
+               )
+             }
+ 
++            if (LLMEvent.is.toolCall(event)) return Effect.succeed({ ...streamed, toolCall: true })
++
+             if (LLMEvent.is.textDelta(event)) {
+               return bus
+                 .publish(SessionEvent.Compaction.Delta, { sessionID, text: event.text })
+@@ -891,6 +993,91 @@ export const estimatePrompt = (context: SessionContext.Loaded) => {
+  * is more. The summary request is capped at the same size, so its output limit is whatever the reserve leaves. A window
+  * too small to give up `RESERVE_MIN` keeps 10%.
+  */
++// ocelot: see Settings. Never above the summary strategy's ceiling, which keeps room for the checkpoint itself.
++const checkpointCeiling = (limit: SessionContext.Loaded["model"]["limit"], settings: Settings) => {
++  const window = limit.input || limit.context
++  if (window <= 0) return Number.POSITIVE_INFINITY
++  return Math.min(
++    calculateCeiling(limit, settings.buffer),
++    Math.floor(window * (settings.ratio ?? CHECKPOINT_RATIO)),
++    settings.max ?? CHECKPOINT_MAX,
++  )
++}
++
++const CHECKPOINT_SECTIONS = [
++  "## Goal",
++  "## Constraints & Preferences",
++  "## Progress",
++  "## Running",
++  "## Key Decisions",
++  "## Next Steps",
++  "## Open Requests",
++  "## Relevant Files",
++  "## Critical Context",
++]
++
++const isCheckpoint = (reply: Streamed) => {
++  if (reply.toolCall || reply.text.trim().length < CHECKPOINT_MIN_CHARS) return false
++  const lines = new Set(reply.text.split("\n").map((line) => line.trim()))
++  return CHECKPOINT_SECTIONS.filter((heading) => lines.has(heading)).length >= CHECKPOINT_MIN_SECTIONS
++}
++
++const CHECKPOINT_NUDGE =
++  "That was not the checkpoint. Do not call tools and do not continue the work. Reply with only the checkpoint, using the exact section headings from the format above."
++
++/** ocelot: pi's checkpoint sections and OpenCode's rules, sent as a follow-up to the live context. */
++export const buildCheckpointPrompt = (recent: string) => {
++  const start = recent.match(/^\[User\]: (.*)$/m)?.[1]
++  const quoted = start && (start.length > 80 ? `${start.slice(0, 80)}…` : start)
++  return [
++    "This is not a new task and not a message from the user. Your only job now is to write a checkpoint of the conversation above, so another agent can continue the work from it.",
++    "Do not call tools. Do not continue the work. Do not answer questions from the conversation. Output only the checkpoint in the format below, with no preamble or closing remarks.",
++    ...(quoted
++      ? [
++          `The latest part of the conversation, from the user message starting "${quoted}" onward, will be attached after this checkpoint as a transcript. Summarize what came before it in detail; for Progress and Next Steps, describe the state as of the very end of the conversation.`,
++        ]
++      : []),
++    "If the conversation begins with an earlier checkpoint, treat it as history, not as truth: carry forward only what is still true and still needed. Drop anything that later messages resolved, finished, contradicted, or made irrelevant.",
++    `## Goal
++[What the user wants, in their own words where it matters. Several items if the session covers several tasks.]
++
++## Constraints & Preferences
++- [Requirements, preferences, and scope limits the user stated, or "(none)"]
++
++## Progress
++### Done
++- [x] [Completed work, including whether it is committed, pushed, released, or deployed]
++### In Progress
++- [ ] [What was being worked on when the conversation stopped]
++### Blocked
++- [What is blocked and why, or "(none)"]
++
++## Running
++- [Anything still running outside the conversation: tmux sessions, background jobs, servers, workers, with how to check on them (session name, log path, URL). Or "(none)"]
++
++## Key Decisions
++- **[Decision]**: [why]
++
++## Next Steps
++1. [Ordered next actions]
++
++## Open Requests
++- [User questions or requests not yet answered or done, in the user's exact words, or "(none)"]
++
++## Relevant Files
++- \`[path]\`: [why it matters] (at most 15, most important first; include paths outside the working directory when relevant, or "(none)")
++
++## Critical Context
++- [Facts needed to continue that cannot easily be found again: exact error messages, commands, URLs, identifiers, numbers, or "(none)"]`,
++    `Rules:
++- Terse, single-line bullets. No prose paragraphs, no nested lists.
++- Preserve exact file paths, symbols, commands, error strings, URLs, and identifiers.
++- Leave out what the agent was given rather than told by the user (AGENTS.md, repository conventions, environment details); the next agent receives these separately.
++- Prefer short references over restating what the next agent can find in the code or files.
++- Do not mention this checkpoint or that the context was compacted.`,
++  ].join("\n\n")
++}
++
+ const calculateCeiling = (limit: SessionContext.Loaded["model"]["limit"], buffer: number | undefined) => {
+   // Unknown limits are reported as 0. An unknown input limit falls back to the context window; with no window at
+   // all, only a provider rejection can limit the request.
+diff --git a/packages/core/test/config/normalization.test.ts b/packages/core/test/config/normalization.test.ts
+index 28702520f2483cc0e9597e052c3b391fcee3c123..b8b41072bb15a2a1a9401e4d3719eb131d82385e 100644
+--- a/packages/core/test/config/normalization.test.ts
++++ b/packages/core/test/config/normalization.test.ts
+@@ -387,6 +387,24 @@ describe("ConfigNormalize", () => {
+     ])
+   })
+ 
++  test("keeps the checkpoint strategy's compaction settings", () => {
++    const result = normalized({
++      compaction: { strategy: "checkpoint", threshold: { ratio: 0.8, tokens: 400_000 }, timeout: 60_000 },
++    })
++    expect(result.encoded.compaction).toEqual({
++      strategy: "checkpoint",
++      threshold: { ratio: 0.8, tokens: 400_000 },
++      timeout: 60_000,
++    })
++    expect(result.diagnostics).toEqual([])
++    const bad = normalized({ compaction: { strategy: "handoff", threshold: { ratio: 2 } } })
++    expect(bad.encoded.compaction).toBeUndefined()
++    expect(bad.diagnostics.map((item) => [item.kind, item.path])).toEqual([
++      ["invalid", ["compaction", "strategy"]],
++      ["invalid", ["compaction", "threshold"]],
++    ])
++  })
++
+   test("distinguishes empty, mixed, and wholly malformed enabled provider lists", () => {
+     expect(normalized({ enabled_providers: [] }).encoded.experimental).toEqual({
+       policies: [{ action: "provider.use", resource: "*", effect: "deny" }],
+diff --git a/packages/core/test/session-compaction-checkpoint.test.ts b/packages/core/test/session-compaction-checkpoint.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b7037ebba26337d7c2c981f3f648c7b782d4262
+--- /dev/null
++++ b/packages/core/test/session-compaction-checkpoint.test.ts
+@@ -0,0 +1,298 @@
++import { expect } from "bun:test"
++import { LLMClient, LLMEvent, LanguageModel, type LLMRequest } from "@opencode/ai"
++import { OpenAIChat } from "@opencode/ai/protocols"
++import { Database } from "@opencode/core/database/database"
++import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
++import { llmClient } from "@opencode/core/effect/app-node-platform"
++import { LayerNode } from "@opencode/util/effect/layer-node"
++import { Bus } from "@opencode/core/bus"
++import { SessionCompaction } from "@opencode/core/session/compaction"
++import type { SessionContext } from "@opencode/core/session/context"
++import { SessionEvent } from "@opencode/core/session/event"
++import { SessionMessage } from "@opencode/core/session/message"
++import { SessionModelRequest } from "@opencode/core/session/model-request"
++import { PluginHooks } from "@opencode/core/plugin/hooks"
++import { SessionProjector } from "@opencode/core/session/projector"
++import { SessionRunnerModel } from "@opencode/core/session/runner/model"
++import { SessionTable } from "@opencode/core/session/sql"
++import { SessionStore } from "@opencode/core/session/store"
++import { Session } from "@opencode/core/session"
++import { Project } from "@opencode/core/project"
++import { ProjectTable } from "@opencode/core/project/sql"
++import { Agent } from "@opencode/core/agent"
++import { AbsolutePath } from "@opencode/core/schema"
++import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
++import { TestClock } from "effect/testing"
++import { testEffect } from "./lib/effect"
++
++// ocelot: the checkpoint strategy (patch core/checkpoint-compaction).
++
++type Reply = (request: LLMRequest) => Stream.Stream<LLMEvent>
++let requests: LLMRequest[] = []
++let script: Reply[] = []
++
++const usage = {
++  inputTokens: 15,
++  outputTokens: 6,
++  nonCachedInputTokens: 10,
++  cacheReadInputTokens: 3,
++  cacheWriteInputTokens: 2,
++}
++const text = (value: string): Reply => () =>
++  Stream.make(
++    LLMEvent.textDelta({ id: "reply", text: value }),
++    LLMEvent.stepFinish({ index: 0, reason: { normalized: "stop" }, usage }),
++    LLMEvent.finish({ reason: { normalized: "stop" } }),
++  )
++const CHECKPOINT = [
++  "## Goal",
++  "- Ship the checkpoint strategy.",
++  "## Constraints & Preferences",
++  "- (none)",
++  "## Progress",
++  "### Done",
++  "- [x] Wrote the prompt",
++  "## Running",
++  "- (none)",
++  "## Key Decisions",
++  "- **Follow-up**: keeps the cache",
++  "## Next Steps",
++  "1. Test it",
++  "## Relevant Files",
++  "- `packages/core/src/session/compaction.ts`: the strategy",
++].join("\n")
++const good = text(CHECKPOINT)
++const toolCall: Reply = () =>
++  Stream.make(
++    LLMEvent.toolCall({ id: "call_1", name: "read", input: { path: "x" } }),
++    LLMEvent.stepFinish({ index: 0, reason: { normalized: "tool-calls" }, usage }),
++    LLMEvent.finish({ reason: { normalized: "tool-calls" } }),
++  )
++const stall: Reply = () => Stream.never
++
++const client = Layer.mock(LLMClient.Service)({
++  stream: (request: LLMRequest) => {
++    requests.push(request)
++    return (script.shift() ?? good)(request)
++  },
++  generate: () => Effect.die("unused"),
++})
++const model = LanguageModel.make({ id: "checkpoint-model", provider: "test", route: OpenAIChat.route })
++const resolve = (limit: { context: number; input?: number; output: number }) =>
++  SessionRunnerModel.resolved(model, {
++    capabilities: { tools: true, input: ["text"], output: ["text"] },
++    cost: [],
++    limit,
++  })
++const it = testEffect(
++  AppNodeBuilder.build(
++    LayerNode.group([
++      Database.node,
++      Bus.node,
++      SessionProjector.node,
++      SessionStore.node,
++      SessionCompaction.node,
++      SessionModelRequest.node,
++      PluginHooks.node,
++    ]),
++    [Bus.node.replace(Bus.configured({ persist: true })), llmClient.replace(client)],
++  ),
++)
++
++const configure = (settings: Partial<SessionCompaction.Settings>) =>
++  Effect.gen(function* () {
++    const compaction = yield* SessionCompaction.Service
++    yield* compaction.transform((editor) => editor.configure({ strategy: "checkpoint", ...settings }))
++  })
++
++const insertSession = (id: Session.ID, overrides?: Partial<typeof SessionTable.$inferInsert>) =>
++  Effect.gen(function* () {
++    const db = (yield* Database.Service).db
++    yield* db
++      .insert(ProjectTable)
++      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
++      .onConflictDoNothing()
++      .run()
++      .pipe(Effect.orDie)
++    yield* db
++      .insert(SessionTable)
++      .values({ id, project_id: Project.ID.global, slug: id, directory: "/project", title: id, version: "test", ...overrides })
++      .run()
++      .pipe(Effect.orDie)
++    const store = yield* SessionStore.Service
++    return yield* store
++      .get(id)
++      .pipe(Effect.flatMap((session) => (session ? Effect.succeed(session) : Effect.die(`session missing: ${id}`))))
++  })
++
++const user = (value: string) =>
++  SessionMessage.User.make({ id: SessionMessage.ID.create(), type: "user", text: value, time: { created: DateTime.makeUnsafe(0) } })
++const assistant = (value: string, input = 0) =>
++  Schema.decodeUnknownSync(SessionMessage.Assistant)({
++    id: SessionMessage.ID.create(),
++    type: "assistant",
++    agent: Agent.defaultID,
++    model: { id: "checkpoint-model", providerID: "test" },
++    content: [{ type: "text", text: value }],
++    tokens: { input, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
++    time: { created: 0, completed: 0 },
++  })
++const conversation = () => [
++  user("First request: build the thing"),
++  assistant("Built the first part."),
++  user("Second request: now test the thing"),
++  assistant("Tests are running."),
++]
++
++const loaded = (
++  session: Session.Info,
++  messages: readonly SessionMessage.Info[],
++  limit = { context: 200_000, output: 32_000 },
++): SessionContext.Loaded => ({
++  session,
++  messages,
++  model: resolve(limit),
++  agent: { id: Agent.defaultID, info: Agent.Info.default(Agent.defaultID) },
++  initial: "Session instructions",
++  tools: { definitions: [], execute: () => Effect.die("Compaction must not execute tools") },
++})
++
++const compactManually = (session: Session.Info, messages: readonly SessionMessage.Info[]) =>
++  Effect.gen(function* () {
++    const bus = yield* Bus.Service
++    const compaction = yield* SessionCompaction.Service
++    const inputID = SessionMessage.ID.create()
++    yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: session.id, reason: "manual", recent: "", inputID })
++    return yield* compaction.compact({ reason: "manual", context: loaded(session, messages), inputID })
++  })
++
++const stored = (id: Session.ID) =>
++  Effect.gen(function* () {
++    const store = yield* SessionStore.Service
++    const first = (yield* store.context(id))[0]
++    return first?.type === "compaction" && first.status === "completed" ? first : undefined
++  })
++
++const last = (request: LLMRequest | undefined) => JSON.stringify(request?.messages.at(-1))
++
++it.effect("checkpoint compacts at 90% of the window, capped at 540k tokens", () =>
++  Effect.gen(function* () {
++    yield* configure({})
++    const compaction = yield* SessionCompaction.Service
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_threshold"))
++    const due = (tokens: number, limit: { context: number; input?: number; output: number }) =>
++      compaction
++        .compact({ reason: "auto", context: loaded(session, [assistant("Done", tokens)], limit) })
++        .pipe(Effect.map((outcome) => outcome.status !== "skipped"))
++    script = []
++    requests = []
++
++    expect(yield* due(179_999, { context: 200_000, output: 32_000 })).toBe(false)
++    expect(yield* due(599_999, { context: 1_000_000, output: 32_000 })).toBe(true)
++    requests = []
++    expect(yield* due(539_999, { context: 1_000_000, output: 32_000 })).toBe(false)
++    expect(requests).toHaveLength(0)
++
++    yield* configure({ ratio: 0.5, max: 100_000 })
++    expect(yield* due(99_999, { context: 1_000_000, output: 32_000 })).toBe(false)
++    expect(yield* due(79_999, { context: 160_000, output: 32_000 })).toBe(false)
++    expect(yield* due(80_000, { context: 160_000, output: 32_000 })).toBe(true)
++  }),
++)
++
++it.effect("checkpoint sends the whole live context with the checkpoint prompt appended", () =>
++  Effect.gen(function* () {
++    yield* configure({ keep: 10 })
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_follow_up"))
++    script = [good]
++    requests = []
++    const hooks = yield* PluginHooks.Service
++    let hooked = 0
++    yield* hooks.register("session", "compaction", (event) => Effect.sync(() => (hooked = event.messages.length)))
++
++    expect(yield* compactManually(session, conversation())).toEqual({ status: "completed" })
++
++    expect(requests).toHaveLength(1)
++    const sent = JSON.stringify(requests[0]?.messages)
++    // Unlike the summary strategy, the recent exchange is part of the request too: it is the cached prefix.
++    expect(sent).toContain("First request: build the thing")
++    expect(sent).toContain("Tests are running.")
++    expect(requests[0]?.messages).toHaveLength(hooked + 1)
++    expect(last(requests[0])).toContain("This is not a new task")
++    expect(last(requests[0])).toContain('from the user message starting \\"Second request: now test the thing\\"')
++    const checkpoint = yield* stored(session.id)
++    expect(checkpoint?.summary).toBe(CHECKPOINT)
++    expect(checkpoint?.recent).toContain("[User]: Second request: now test the thing")
++  }),
++)
++
++it.effect("checkpoint reminds a reply that calls a tool, then accepts the checkpoint", () =>
++  Effect.gen(function* () {
++    yield* configure({})
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_tool_call"))
++    script = [toolCall, good]
++    requests = []
++
++    expect(yield* compactManually(session, conversation())).toEqual({ status: "completed" })
++    expect(requests).toHaveLength(2)
++    expect(last(requests[1])).toContain("That was not the checkpoint")
++    expect((yield* stored(session.id))?.summary).toBe(CHECKPOINT)
++  }),
++)
++
++it.effect("checkpoint falls back to a summary after two unusable replies", () =>
++  Effect.gen(function* () {
++    yield* configure({})
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_fallback"))
++    const summary = "## Objective\n- fallback summary"
++    script = [toolCall, text("Sure, continuing the work now."), text(summary)]
++    requests = []
++
++    expect(yield* compactManually(session, conversation())).toEqual({ status: "completed" })
++    expect(requests).toHaveLength(3)
++    expect(last(requests[2])).toContain("Summarize only what")
++    expect((yield* stored(session.id))?.summary).toBe(summary)
++  }),
++)
++
++it.effect("checkpoint retries a response that stalls past the timeout", () =>
++  Effect.gen(function* () {
++    yield* configure({ timeout: 1_000 })
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_stall"))
++    script = [stall, good]
++    requests = []
++
++    const fiber = yield* compactManually(session, conversation()).pipe(Effect.forkScoped)
++    for (let step = 0; step < 20 && requests.length < 2; step++) yield* TestClock.adjust("1 second")
++    expect(yield* Fiber.join(fiber)).toEqual({ status: "completed" })
++    expect(requests).toHaveLength(2)
++    expect((yield* stored(session.id))?.summary).toBe(CHECKPOINT)
++  }),
++)
++
++it.effect("overflow recovery keeps the summary path: the live context no longer fits", () =>
++  Effect.gen(function* () {
++    yield* configure({})
++    const compaction = yield* SessionCompaction.Service
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_overflow"))
++    script = [text("## Objective\n- overflow summary")]
++    requests = []
++
++    const outcome = yield* compaction.compact({ reason: "overflow", context: loaded(session, conversation()) })
++    expect(outcome).toEqual({ status: "completed" })
++    expect(last(requests[0])).toContain("Summarize only what")
++    expect(last(requests[0])).not.toContain("This is not a new task")
++  }),
++)
++
++it.effect("the summary strategy stays the default", () =>
++  Effect.gen(function* () {
++    yield* configure({ strategy: "summary" })
++    const session = yield* insertSession(Session.ID.make("ses_checkpoint_default"))
++    script = [text("## Objective\n- summary")]
++    requests = []
++
++    expect(yield* compactManually(session, conversation())).toEqual({ status: "completed" })
++    expect(last(requests[0])).toContain("Summarize only what")
++  }),
++)
+diff --git a/packages/schema/src/config/compaction.ts b/packages/schema/src/config/compaction.ts
+index 7661e57d2a012bb64da00c9c603888e677bb0431..63c9cc613ad95c7f7cd0dc1e5d4435a300c39fac 100644
+--- a/packages/schema/src/config/compaction.ts
++++ b/packages/schema/src/config/compaction.ts
+@@ -7,8 +7,19 @@ export class Keep extends Schema.Class<Keep>("Config.Compaction.Keep")({
+   tokens: NonNegativeInt.pipe(optional),
+ }) {}
+ 
++// ocelot: when the checkpoint strategy compacts, as a share of the window and in tokens.
++export class Threshold extends Schema.Class<Threshold>("Config.Compaction.Threshold")({
++  ratio: Schema.Finite.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1)).pipe(optional),
++  tokens: NonNegativeInt.pipe(optional),
++}) {}
++
+ export class Info extends Schema.Class<Info>("Config.Compaction")({
+   auto: Schema.Boolean.pipe(optional),
+   keep: Keep.pipe(optional),
+   buffer: NonNegativeInt.pipe(optional),
++  // ocelot: "checkpoint" writes the summary as a follow-up to the live context (see SessionCompaction).
++  strategy: Schema.Literals(["summary", "checkpoint"]).pipe(optional),
++  threshold: Threshold.pipe(optional),
++  /** Milliseconds without any output from the summary request before it is retried; 0 disables. */
++  timeout: NonNegativeInt.pipe(optional),
+ }) {}
