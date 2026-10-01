@@ -28,3 +28,4 @@ server/api-errors.patch
 web/service-update.patch
 web/tool-elapsed.patch
 web/scrollback-resync.patch
+web/ios-history-prepend.patch

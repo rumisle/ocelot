@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 2 Oct 2026 00:46:34 +0800
+Subject: app/timeline: on iOS, hold a loaded history page until scrolling
+ rests
+
+The virtualizer defers scroll corrections on iOS while scrolling (momentum would
+break), so a page prepended mid-scroll first showed older content (the row under
+the finger jumped up), then snapped back once scrolling stopped. The page is
+now published once the timeline is at rest, when the correction is immediate.
+
+Ocelot-Patch: web/ios-history-prepend
+
+diff --git a/packages/app/src/session/timeline/interaction.ts b/packages/app/src/session/timeline/interaction.ts
+index 30d618f79e652355ec03ee311ce238e71be7c4a8..62799a7b800541f5e84d10cbfd2b8788f22b8b2b 100644
+--- a/packages/app/src/session/timeline/interaction.ts
++++ b/packages/app/src/session/timeline/interaction.ts
+@@ -47,6 +47,29 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+   let scrollStateTarget: HTMLDivElement | undefined
+   let fillFrame: number | undefined
+   let historyContinuationFrame: number | undefined
++  // ocelot: on iOS the virtualizer defers scroll corrections until scrolling stops, so a page of
++  // history prepended mid-scroll first shows older content, then snaps back. Hold the page until
++  // the timeline is at rest; then the correction is immediate and the visible row stays put.
++  let lastScroll = 0
++  let touching = false
++  const touchStart = () => (touching = true)
++  const touchEnd = () => (touching = false)
++  window.addEventListener("touchstart", touchStart, { passive: true, capture: true })
++  window.addEventListener("touchend", touchEnd, { passive: true, capture: true })
++  window.addEventListener("touchcancel", touchEnd, { passive: true, capture: true })
++  onCleanup(() => {
++    window.removeEventListener("touchstart", touchStart, { capture: true })
++    window.removeEventListener("touchend", touchEnd, { capture: true })
++    window.removeEventListener("touchcancel", touchEnd, { capture: true })
++  })
++  const atRest = () =>
++    new Promise<void>((resolve) => {
++      const check = () => {
++        if (!touching && performance.now() - lastScroll >= restDelay) return resolve()
++        setTimeout(check, 50)
++      }
++      check()
++    })
+   const historyRequests = new Set<string>()
+   const visibleUserMessages = timeline.visibleUserMessages
+   const anchor = (id: string) => `message-${id}`
+@@ -169,7 +192,7 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+     historyRequests.add(owner.key)
+     const before = timeline.messages().length
+     try {
+-      await timeline.history.loadOlder()
++      await timeline.history.loadOlder(isIOSWebKit() ? { publishWhen: atRest } : undefined)
+     } finally {
+       historyRequests.delete(owner.key)
+     }
+@@ -182,6 +205,7 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+     })
+   }
+   const onHistoryScroll = () => {
++    lastScroll = performance.now()
+     if (
+       historyRequests.has(session.ownership.key()) ||
+       timeline.history.loading() ||
+@@ -329,3 +353,13 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+ }
+ 
+ export type SessionTimelineInteraction = ReturnType<typeof createSessionTimelineInteraction>
++
++/** Longer than the virtualizer's isScrollingResetDelay (150 ms), after which it applies corrections. */
++const restDelay = 200
++
++/** The virtualizer's own iOS check (@tanstack/virtual-core), which decides whether it defers corrections. */
++function isIOSWebKit() {
++  if (typeof navigator === "undefined") return false
++  if (/iP(hone|od|ad)/.test(navigator.userAgent)) return true
++  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 0
++}
+diff --git a/packages/app/src/session/timeline/model.ts b/packages/app/src/session/timeline/model.ts
+index 8b3724c246ce53be8c4d96935a1635dc8d37cd5b..ae598010d587ee622267bb2476c9ae15cc04d162 100644
+--- a/packages/app/src/session/timeline/model.ts
++++ b/packages/app/src/session/timeline/model.ts
+@@ -45,12 +45,17 @@ export function createTimelineModel(input: { session: Pick<SessionModel, "identi
+     const id = input.session.identity.sessionID()
+     return id ? data.session.message.loading(id) : false
+   }
+-  const loadOlder = async (options?: { before?: () => void; after?: (done: boolean) => void }) => {
++  const loadOlder = async (options?: {
++    before?: () => void
++    after?: (done: boolean) => void
++    /** ocelot: holds the loaded page until it resolves. */
++    publishWhen?: () => Promise<void>
++  }) => {
+     return loadOlderTimeline({
+       sessionID: input.session.identity.sessionID,
+       more,
+       loading,
+-      loadMore: (id) => data.session.message.loadMore(id),
++      loadMore: (id) => data.session.message.loadMore(id, { publishWhen: options?.publishWhen }),
+       before: options?.before,
+       after: options?.after,
+     })
+diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
+index db79cc4f82e701ae8d07472ae6c54ef9d3d18870..08dfc42e438e8797cf634febf2b3825c2344a304 100644
+--- a/packages/client/src/solid/data.ts
++++ b/packages/client/src/solid/data.ts
+@@ -1749,6 +1749,8 @@ export function createData(config: CreateDataInput) {
+             signal?: AbortSignal
+             /** Runs synchronously inside the store-publication batch. */
+             beforePublish?: () => void
++            /** ocelot: holds the fetched page until it resolves (e.g. until scrolling settles). */
++            publishWhen?: () => Promise<void>
+           },
+         ) {
+           const signal = options?.signal
+@@ -1788,6 +1790,8 @@ export function createData(config: CreateDataInput) {
+               next = response.cursor.next ?? undefined
+               if (!options?.all) break
+             } while (next)
++            if (options?.publishWhen) await options.publishWhen()
++            if (signal?.aborted) return
+             // A jump through history publishes once, not once per page of offscreen messages.
+             const existing = store.session.message[sessionID] ?? []
+             const ids = new Set(existing.map((item) => item.id))

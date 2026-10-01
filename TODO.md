@@ -155,7 +155,13 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          with or without new messages while away.
    - [ ] If iOS evicts the page (full reload), it opens at the bottom: the position isn't saved.
          Possible: remember the anchor message per session (sessionStorage), load down to it on open.
-   - [ ] Loading older pages jumps back and forth (flicker). Reproduced in WebKit (podman image
+   - [x] Fixed (web/ios-history-prepend): cause is @tanstack/virtual-core deferring scroll corrections
+         on iOS while scrolling (`_iosDeferredAdjustment`), so a prepended page showed older content, then
+         snapped back at rest. On iOS the loaded page is now published once the timeline is at rest (no
+         touch, 200 ms without scroll). WebKit repro after: no flash, steady 59 → 1. Left: with wheel + iPhone
+         UA (not a real combination) deferred row-size corrections still flush at the top; the touch path
+         translates those visually instead.
+   - [ ] (was) Loading older pages jumps back and forth (flicker). Reproduced in WebKit (podman image
          mcr.microsoft.com/playwright/python:v1.63.0-noble, test/flicker-webkit.py samples the top row
          every frame): near the top, a prepended batch leaves scrollTop at 0, the view shows turn 1 for
          ~200 ms, then the app's compensation lands ~7 turns too low (15 → 22), every run. Chromium only
