@@ -57,6 +57,11 @@ Open:
   `test/fake-anthropic.ts`) and a throwaway server with its own XDG dirs.
 - `scripts/dev-server.sh start` runs one: the built binary + `test/fake-anthropic.ts` (streams with
   realistic timings and cache usage; `LINES n`, `SHELL cmd`), web UI at http://127.0.0.1:4852 (opencode / test).
+- Unit tests: `scripts/test.sh [pkg ...]` or `scripts/test.sh pkg file ...`. It uses the pinned bun
+  (1.4.2, not the system 1.3.11) and each package's own runner (core's script/test.ts sets the test
+  HOME, app needs the happydom preload). Plain `bun test` gave ~40 false failures (plugin reload,
+  watcher, preload, app SSR). Baseline 2026-10-02: core 5568/0, server 65/0, app 930/0; client 4
+  and cli 22 known (see the script header).
 
 ## 1. Plugin API (server)
 
@@ -194,11 +199,8 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          usage measured before the compaction is ignored. E2E (fake provider): compaction, no second compaction,
          editing a kept message undoes it, switching back restores it, forks before/after both correct.
    - [x] opencode-vcc removed from the config (its compaction hook result would win).
-   - Note: on this machine 6 "config plugin reloads" tests and preload's "isolates global home and XDG roots"
-     fail on plain v2.0.19 too. Since 2026-10-01 also 7 in test/plugin/{supervisor-reload,module}.test.ts
-     (plugin never activates: "RPC is unavailable: greeter"), again on plain v2.0.19 too, with an empty HOME
-     too. Environment; not investigated yet. packages/cli test/updater-install.test.ts (22) fails by design:
-     patch ocelot/updates installs from GitHub releases, not npm.
+   - Note: the "pre-existing" core failures (plugin reload, watcher, preload) were the wrong bun /
+     runner; all pass with scripts/test.sh (see Testing).
 4. **Background shell considered harmful.** How it works today (`tool/plugin/shell.ts`,
    `job.ts`): `shell {background: true}` returns at once; on completion the output is posted
    as a *synthetic* inbox item with delivery `steer`, which reaches the model as a **user-role
