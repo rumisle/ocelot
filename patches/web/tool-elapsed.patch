@@ -1,0 +1,225 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 2 Oct 2026 00:12:58 +0800
+Subject: session-ui/tools: how long each tool call ran, next to its name
+
+"Shell 12s", like "Thought 1s": execution time (time.ran to time.completed),
+counting up while it runs, hidden under a second. Collapsed groups show the span
+from their first start to their last end.
+
+Ocelot-Patch: web/tool-elapsed
+
+diff --git a/packages/session-ui/src/components/basic-tool.css b/packages/session-ui/src/components/basic-tool.css
+index 8bd027ec0d45c18dcd10bd3746f943f325ba5b9a..05ab8712ce97bb1ea487afa3839213547a43fe41 100644
+--- a/packages/session-ui/src/components/basic-tool.css
++++ b/packages/session-ui/src/components/basic-tool.css
+@@ -101,6 +101,18 @@
+     }
+   }
+ 
++  /* ocelot: elapsed time next to the tool name ("Shell 12s"). */
++  [data-slot="tool-elapsed"] {
++    flex-shrink: 0;
++    white-space: nowrap;
++    font-family: var(--font-family-sans);
++    font-variant-numeric: tabular-nums;
++    font-size: 13px;
++    font-weight: var(--font-weight-regular);
++    line-height: var(--line-height-compact);
++    color: var(--v2-text-text-faint);
++  }
++
+   [data-slot="basic-tool-tool-subtitle"] {
+     flex-shrink: 1;
+     min-width: 0;
+diff --git a/packages/session-ui/src/components/basic-tool.tsx b/packages/session-ui/src/components/basic-tool.tsx
+index 6dd34ecc5965f1108159b8c180f89d670938a990..251a7726e6ff50f6baea4f879875b1b9d4e59855 100644
+--- a/packages/session-ui/src/components/basic-tool.tsx
++++ b/packages/session-ui/src/components/basic-tool.tsx
+@@ -13,6 +13,7 @@ import {
+ } from "solid-js"
+ import { animate, type AnimationPlaybackControls } from "motion"
+ import { useI18n } from "@opencode/ui/context/i18n"
++import { ToolElapsed } from "./tool-elapsed"
+ import { createStore } from "solid-js/store"
+ import { Collapsible } from "@opencode/ui/collapsible"
+ import type { IconProps } from "@opencode/ui/icon"
+@@ -226,6 +227,7 @@ export function BasicTool(props: BasicToolProps) {
+                     >
+                       <TextShimmer text={title().title} active={pending()} />
+                     </span>
++                    <ToolElapsed />
+                     <Show when={!pending() || title().subtitle || title().args?.length}>
+                       <Show when={title().subtitle}>
+                         <span
+diff --git a/packages/session-ui/src/components/tool-elapsed.tsx b/packages/session-ui/src/components/tool-elapsed.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..84b7894f401f05a13e80aac060c4ac9d34af109e
+--- /dev/null
++++ b/packages/session-ui/src/components/tool-elapsed.tsx
+@@ -0,0 +1,48 @@
++import { createContext, createEffect, createMemo, createSignal, onCleanup, Show, useContext, type Accessor } from "solid-js"
++import { useI18n } from "@opencode/ui/context/i18n"
++
++/**
++ * ocelot: how long a tool call ran (from `time.ran` to `time.completed`), next to its name like
++ * "Thought 1s". Counts up while it runs; calls under a second show nothing.
++ */
++export type ToolTime = { readonly ran?: number; readonly completed?: number }
++
++/** The current tool call's time, provided by ToolDisplay for the triggers its renderers build. */
++export const ToolTimeContext = createContext<Accessor<ToolTime | undefined>>()
++
++export function ToolElapsed(props: { time?: ToolTime }) {
++  const i18n = useI18n()
++  const context = useContext(ToolTimeContext)
++  const time = () => props.time ?? context?.()
++  const [now, setNow] = createSignal(Date.now())
++  createEffect(() => {
++    const current = time()
++    if (current?.ran === undefined || current.completed !== undefined) return
++    setNow(Date.now())
++    const timer = setInterval(() => setNow(Date.now()), 1_000)
++    onCleanup(() => clearInterval(timer))
++  })
++  const text = createMemo(() => {
++    const current = time()
++    if (current?.ran === undefined) return undefined
++    const ms = (current.completed ?? now()) - current.ran
++    if (!(ms >= 1_000)) return undefined
++    const total = current.completed === undefined ? Math.floor(ms / 1_000) : Math.round(ms / 1_000)
++    const numfmt = new Intl.NumberFormat(i18n.locale())
++    if (total < 60) return i18n.t("ui.message.duration.seconds", { count: numfmt.format(total) })
++    return i18n.t("ui.message.duration.minutesSeconds", {
++      minutes: numfmt.format(Math.floor(total / 60)),
++      seconds: numfmt.format(total % 60),
++    })
++  })
++  return <Show when={text()}>{(value) => <span data-slot="tool-elapsed">{value()}</span>}</Show>
++}
++
++/** The span a group of calls covered: first start to last end, running while any call runs. */
++export function groupTime(times: readonly ToolTime[]): ToolTime | undefined {
++  const ran = times.flatMap((time) => (time.ran === undefined ? [] : [time.ran]))
++  if (ran.length === 0) return undefined
++  const running = times.some((time) => time.ran !== undefined && time.completed === undefined)
++  const completed = times.flatMap((time) => (time.completed === undefined ? [] : [time.completed]))
++  return { ran: Math.min(...ran), completed: running ? undefined : Math.max(...completed) }
++}
+diff --git a/packages/session-ui/src/components/tool-error-card.tsx b/packages/session-ui/src/components/tool-error-card.tsx
+index 80bf8ab16c5110aba5a32ab0c7698524a005182f..d4da8ac31e67f43146bc813abc369a8d960e6294 100644
+--- a/packages/session-ui/src/components/tool-error-card.tsx
++++ b/packages/session-ui/src/components/tool-error-card.tsx
+@@ -6,6 +6,7 @@ import { Icon } from "@opencode/ui/icon"
+ import { IconButton } from "@opencode/ui/icon-button"
+ import { Tooltip } from "@opencode/ui/tooltip"
+ import { useI18n } from "@opencode/ui/context/i18n"
++import { ToolElapsed } from "./tool-elapsed"
+ 
+ export interface ToolErrorCardProps extends Omit<ComponentProps<typeof Card>, "children" | "variant"> {
+   tool: string
+@@ -103,6 +104,7 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
+                 <div data-slot="basic-tool-tool-info-structured">
+                   <div data-slot="basic-tool-tool-info-main">
+                     <span data-slot="basic-tool-tool-title">{name()}</span>
++                    <ToolElapsed />
+                     <Show when={split.subtitle}>
+                       <Show
+                         when={split.href}
+diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
+index c33e862acac09db7dc532688f42bc8d0fb53aec4..c30aded3aaf0aa7737ff06aeeddf8cd49f03cb59 100644
+--- a/packages/session-ui/src/message/current-message.tsx
++++ b/packages/session-ui/src/message/current-message.tsx
+@@ -96,6 +96,7 @@ export function SessionAssistantContent(props: {
+             metadata={currentToolMetadata(tool())}
+             output={currentToolOutput(tool())}
+             status={tool().state.status}
++            time={tool().time}
+             error={currentToolError(tool())}
+             defaultOpen={props.defaultOpen}
+             open={props.toolOpen}
+diff --git a/packages/session-ui/src/tools/tool-renderer.tsx b/packages/session-ui/src/tools/tool-renderer.tsx
+index be2494089d3f7b14195e32ec15080d4e6ccc7fd4..884964c636ce949ffd543a81a84373c5f27d303b 100644
+--- a/packages/session-ui/src/tools/tool-renderer.tsx
++++ b/packages/session-ui/src/tools/tool-renderer.tsx
+@@ -22,6 +22,7 @@ import { type SessionSummary, useData } from "../context"
+ import { useFileComponent } from "@opencode/ui/context/file"
+ import { type UiI18n, useI18n } from "@opencode/ui/context/i18n"
+ import { BasicTool, GenericTool } from "../components/basic-tool"
++import { groupTime, ToolElapsed, ToolTimeContext, type ToolTime } from "../components/tool-elapsed"
+ import { FileIcon } from "@opencode/ui/file-icon"
+ import { Icon, type IconProps } from "@opencode/ui/icon"
+ import { ToolErrorCard } from "../components/tool-error-card"
+@@ -629,6 +630,7 @@ export function CurrentContextToolGroup(props: {
+               <Show when={label().after}>
+                 {(after) => <span data-slot="context-tool-group-prefix">{after()}</span>}
+               </Show>
++              <ToolElapsed time={groupTime(tools().map((tool) => tool.time))} />
+             </span>
+           </div>
+         }
+@@ -713,6 +715,7 @@ export function CurrentContextToolGroup(props: {
+                                       output={currentToolOutput(tool())}
+                                       error={currentToolError(tool())}
+                                       status={tool().state.status}
++                                      time={tool().time}
+                                       defaultOpen={props.toolDefaultOpen?.(tool()) ?? false}
+                                       open={props.toolOpen?.(tool().id) ?? props.toolDefaultOpen?.(tool())}
+                                       onOpenChange={(open) => props.onToolOpenChange?.(tool().id, open)}
+@@ -788,6 +791,7 @@ export function CurrentContextToolGroup(props: {
+                                         }
+                                       />
+                                     </span>
++                                    <ToolElapsed time={tool().time} />
+                                     <Show when={trigger().subtitle}>
+                                       {(subtitle) => <span data-slot="basic-tool-tool-subtitle">{subtitle()}</span>}
+                                     </Show>
+@@ -1185,6 +1189,8 @@ export function ToolDisplay(
+   props: ToolProps & {
+     id: string
+     error?: string
++    /** ocelot: the call's times, for the elapsed time next to its name. */
++    time?: ToolTime
+   },
+ ) {
+   const data = useData()
+@@ -1210,6 +1216,7 @@ export function ToolDisplay(
+ 
+   return (
+     <Show when={!hideQuestion()}>
++      <ToolTimeContext.Provider value={() => props.time}>
+       <div data-component="tool-part-wrapper" data-timeline-part-id={props.id}>
+         <Switch>
+           <Match when={error()}>
+@@ -1251,6 +1258,7 @@ export function ToolDisplay(
+           </Match>
+         </Switch>
+       </div>
++      </ToolTimeContext.Provider>
+     </Show>
+   )
+ }
+@@ -1500,6 +1508,7 @@ ToolRegistry.register({
+               <span data-slot="basic-tool-tool-title">
+                 <TextShimmer text={i18n.t("ui.tool.webfetch")} active={pending()} />
+               </span>
++              <ToolElapsed />
+               <Show when={!pending() && url()}>
+                 <a
+                   data-slot="basic-tool-tool-subtitle"
+@@ -1787,6 +1796,7 @@ ToolRegistry.register({
+               <span data-slot="basic-tool-tool-title">
+                 <TextShimmer text={i18n.t("ui.tool.execute")} active={pending()} />
+               </span>
++              <ToolElapsed />
+               <Show when={!open() && code()}>
+                 <ShellSubmessage text={code().split("\n", 1)[0]} animate={sawPending} />
+               </Show>
+@@ -1870,6 +1880,7 @@ ToolRegistry.register({
+               <span data-slot="basic-tool-tool-title">
+                 <TextShimmer text={i18n.t("ui.tool.shell")} active={pending()} />
+               </span>
++              <ToolElapsed />
+               <Show when={!open()}>
+                 <Show
+                   when={command()}

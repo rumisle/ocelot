@@ -221,7 +221,8 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
    request format (Anthropic Messages body; Vertex `:streamRawPredict`, gateways/proxies)
    rather than provider ID. Which provider(s)? (opencode-cache-warmer repo)
 6. **GPT adapter of the internal LLM proxy.** Which proxy, and what is broken?
-7. **Tool time elapsed.** Tool parts already record `time.created/ran/completed`: show the
+7. [x] **Tool time elapsed.** Patch web/tool-elapsed: "Shell 12s" after the tool name (execution time
+   ran→completed, live while running, hidden under 1 s); collapsed groups show first start → last end. Tool parts already record `time.created/ran/completed`: show the
    duration (live while running) in the tool row. Shell rows have created/completed too.
 8. **Mobile header.** Always visible: model, effort, context % (bar) and cost; Changes /
    Files / Terminal move into the menu. Needs a design pass (sketch first).
