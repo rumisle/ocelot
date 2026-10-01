@@ -46,8 +46,8 @@ Open:
         cli/restart-when-idle: GET/POST /api/ocelot/restart). Shows while a restart is pending (version
         of the new binary on hover); click restarts now and reloads; a stale page after a restart offers
         a reload the same way. Small icon instead of a banner, so nothing to dismiss. Desktop + phone checked.
-  - [ ] A session waiting on a permission/question counts as running, so it holds the restart back
-        until answered. Decide whether that should count as idle (check that resume restores the prompt).
+  - [x] A session waiting on a permission/question counts as running, so it holds the restart back
+        until answered. Decided (2026-10-02): keep it that way.
       Accepted: the restarted server inherits the waiter's environment (the old server's, or the
       shell that ran install.sh), not a fresh login shell as the systemd unit gives.
 
