@@ -207,7 +207,7 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          wait with ..." plus the output so far, i.e. the same state the recipe would have
          produced. Needs the process to be started inside tmux from the beginning (or a
          wrapper), since a running child can't be moved into tmux afterwards.
-5. **Cache warming for Claude on other providers.** The warmer hooks only providers with
+5. [x] **Cache warming for Claude on other providers.** Done in opencode-cache-warmer e727c81 / 87aff71. The warmer hooks only providers with
    known lifetimes (default `anthropic`) and only warms `/v1/messages` URLs. Detect by
    request format (Anthropic Messages body; Vertex `:streamRawPredict`, gateways/proxies)
    rather than provider ID. Which provider(s)? (opencode-cache-warmer repo)
@@ -229,5 +229,13 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
    - [ ] Settings (shortcuts, auto-accept, ...) live in browser localStorage per device.
          Sync them through the server (core has a KV table; add an endpoint + a persistence
          adapter for the chosen namespaces).
+12. [ ] **Errors that say nothing.** A defect (e.g. SQLITE_CORRUPT) or an unknown route returns a 500/404
+      with an empty body and no content-type; the web client then shows only
+      "ClientError: UnsupportedContentType", and the defect is logged at INFO. Return a JSON error body
+      for defects and unknown routes, log defects at ERROR, and have the client include status + path.
+      (Hit 2026-10-01 on an NFS home that filled up and corrupted the database.)
+13. [ ] **`job` helper instead of the tmux recipe** (agent-config): `job start NAME -- cmd`, `job wait ID`
+      (≤ 90 s, re-callable; done = an `exit` file written by rename; process gone without it = died),
+      `job log`, `job kill` (process group). Then shrink the AGENTS.md section, then item 4 step 1.
 11. [ ] Config watching fails: `~/.config/opencode` is a symlink (to agent-config) and the
       watcher errors "inotify_add_watch ... Not a directory", so config edits may not reload.
