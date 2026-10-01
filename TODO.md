@@ -81,10 +81,9 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 - [ ] Syntax highlighting like pi-review.
 
 ### Timeline
-- [ ] Follow scrolling. Upstream has it (virtualizer "pinned" state; wheel-up unpins, reaching the
-      end or sending re-pins). Could not reproduce a failure headless (desktop + touch, plain text,
-      tool calls, send while scrolled up). Need the exact case: device, what was on screen.
-- [ ] Tool status: running state + duration per call. Needs a UI design first.
+- [x] Follow scrolling: upstream has it (virtualizer "pinned" state; wheel-up unpins, reaching the
+      end or sending re-pins). No failure reproduced; reopen with the exact case if it shows up.
+- [x] Tool status: running state + duration per call, see backlog 7 (web/tool-elapsed).
 - [x] Working timer in the composer next to stop, whole run like pi (queued follow-ups included,
       resets when idle). Removed the flickering "Working" row. Patch `web/working-timer`.
 - [x] Message meta: user messages lose "Build · model · time"; assistant keeps only the duration.
@@ -99,7 +98,7 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       Patch `web/composer-one-line`. Upstream e2e `model-selection-flow.spec.ts` still expects the old button.
 
 ### Mobile
-- [ ] (later) Top bar → two floating buttons; it wastes a lot of vertical space.
+- (moved to backlog 8, session header, high priority)
 
 - [x] Password prompt in the app. Dropped `web/password-prompt` in 2.0.19: upstream now sends the
       Basic challenge only to page loads (#50970) and shows a sign-in screen with address, password,
@@ -164,14 +163,9 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          touch, 200 ms without scroll). WebKit repro after: no flash, steady 59 → 1. Left: with wheel + iPhone
          UA (not a real combination) deferred row-size corrections still flush at the top; the touch path
          translates those visually instead.
-   - [ ] (was) Loading older pages jumps back and forth (flicker). Reproduced in WebKit (podman image
-         mcr.microsoft.com/playwright/python:v1.63.0-noble, test/flicker-webkit.py samples the top row
-         every frame): near the top, a prepended batch leaves scrollTop at 0, the view shows turn 1 for
-         ~200 ms, then the app's compensation lands ~7 turns too low (15 → 22), every run. Chromium only
-         steps back one turn per loaded page. Real iOS takes the touch path (deferred scrollAdjustment),
-         which Linux WebKit can't emulate (no Touch constructor); confirm with a phone recording.
-         Note: programmatic scrollBy without a wheel/touch never unpins, so it snaps to the bottom;
-         tests must send the intent first.
+         Repro: test/flicker-webkit.py in podman mcr.microsoft.com/playwright/python:v1.63.0-noble
+         (samples the top row every frame). Programmatic scrollBy without a wheel/touch never unpins,
+         so tests must send the intent first. Confirm on the phone (2.0.19-8+).
    - [ ] Orientation while scrolling back: e.g. a sticky "which turn am I in" header or
          scrubber with turn positions.
 2. **Edit/branches polish.**
@@ -243,8 +237,9 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 7. [x] **Tool time elapsed.** Patch web/tool-elapsed: "Shell 12s" after the tool name (execution time
    ran→completed, live while running, hidden under 1 s); collapsed groups show first start → last end. Tool parts already record `time.created/ran/completed`: show the
    duration (live while running) in the tool row. Shell rows have created/completed too.
-8. **Mobile header.** Always visible: model, effort, context % (bar) and cost; Changes /
-   Files / Terminal move into the menu. Needs a design pass (sketch first).
+8. **Session header (HIGH PRIORITY), desktop and mobile.** Always visible: model, effort, context %
+   (bar) and cost; Changes / Files / Terminal move into a menu. On mobile the current top bar
+   wastes a lot of vertical space. Needs a design pass (sketch first).
 9. **Pi-style rewind to any step.** Each model step is its own assistant message, and
    `_ocelot_branch` can park from any message, so "rewind here" on a step (e.g. before a tool
    result that trips a classifier) + a steering message is a UI + small core change: allow the
@@ -263,7 +258,7 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       "ClientError: UnsupportedContentType", and the defect is logged at INFO. Return a JSON error body
       for defects and unknown routes, log defects at ERROR, and have the client include status + path.
       (Hit 2026-10-01 on an NFS home that filled up and corrupted the database.)
-13. [ ] **`job` helper instead of the tmux recipe** (agent-config): `job start NAME -- cmd`, `job wait ID`
+13. [ ] **(HIGH PRIORITY) `job` helper instead of the tmux recipe** (agent-config): `job start NAME -- cmd`, `job wait ID`
       (≤ 90 s, re-callable; done = an `exit` file written by rename; process gone without it = died),
       `job log`, `job kill` (process group). Then shrink the AGENTS.md section, then item 4 step 1.
 11. [x] (patch core/watch-symlinked-dir: watch the real directory, report paths under the link) Config watching fails: `~/.config/opencode` is a symlink (to agent-config) and the
