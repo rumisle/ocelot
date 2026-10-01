@@ -1,0 +1,190 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Thu, 1 Oct 2026 22:10:20 +0800
+Subject: server: API failures answer with a JSON error; the client names the
+ request
+
+A defect (e.g. SQLITE_CORRUPT) or an unknown route returned an empty 500/404, which
+the web client could only report as "ClientError: UnsupportedContentType", and
+the defect was logged at INFO. /api/ requests now get {_tag, message} naming the
+route and the cause, defects are logged at ERROR, and the client's
+UnsupportedContentType includes the status and path.
+
+Ocelot-Patch: server/api-errors
+
+diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
+index a0457753fea9b135a60d6b50872be1a90f70f019..d1472b6e8236ccc65244711d771f885e44ee7ab3 100644
+--- a/packages/client/src/promise/generated/client.ts
++++ b/packages/client/src/promise/generated/client.ts
+@@ -2254,7 +2254,7 @@ async function json(response: Response): Promise<unknown> {
+     try {
+       await response.body?.cancel()
+     } catch {}
+-    throw new ClientError("UnsupportedContentType", { detail: response.headers.get("content-type") })
++    throw new ClientError("UnsupportedContentType", { detail: describe(response) })
+   }
+   let text: string
+   try {
+@@ -2283,6 +2283,16 @@ function declared(body: DeclaredErrorBody) {
+   return error
+ }
+ 
++// ocelot: name the request, so an error without a JSON body still says where it came from.
++function describe(response: Response) {
++  const type = response.headers.get("content-type") ?? "no content-type"
++  let path = response.url
++  try {
++    path = new URL(response.url).pathname
++  } catch {}
++  return path ? `${type} (${response.status} ${path})` : `${type} (${response.status})`
++}
++
+ function isContentType(response: Response, expected: string) {
+   return response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === expected
+ }
+diff --git a/packages/client/test/promise.test.ts b/packages/client/test/promise.test.ts
+index 4eb1ea22f169db60760d23c7b23b322f565e3350..c1cf405b91b4c3c9791febe2a5ec8e346cedf09d 100644
+--- a/packages/client/test/promise.test.ts
++++ b/packages/client/test/promise.test.ts
+@@ -207,7 +207,7 @@ test("client errors keep the reason and describe the failure in the message", as
+   expect(await failure(async () => new Response("<html>", { headers: { "content-type": "text/html" } }))).toMatchObject(
+     {
+       reason: "UnsupportedContentType",
+-      message: "UnsupportedContentType: text/html",
++      message: "UnsupportedContentType: text/html (200)",
+     },
+   )
+ })
+diff --git a/packages/httpapi-codegen/src/index.ts b/packages/httpapi-codegen/src/index.ts
+index ae7cd0712918e3254858e5e55e15858a4fcdd2c6..006a4875ad58544c19baac06c16858e102ff3714 100644
+--- a/packages/httpapi-codegen/src/index.ts
++++ b/packages/httpapi-codegen/src/index.ts
+@@ -967,7 +967,7 @@ function renderPromiseClient(groups: ReadonlyArray<Group>) {
+     if (group.endpoints[0]?.topLevel) return fields
+     return `${JSON.stringify(group.identifier)}: { ${fields} }`
+   })
+-  return `import type { ${imports.join(", ")} } from "./types.js"\nimport { ClientError } from "./client-error.js"\n\nexport interface ClientOptions {\n  readonly baseUrl: string\n  readonly fetch?: typeof globalThis.fetch\n  readonly headers?: RequestInit["headers"]\n}\n\nexport interface RequestOptions {\n  readonly signal?: AbortSignal\n  readonly headers?: RequestInit["headers"]\n  /** Reports every chunk a streaming response receives, including keepalive comments that yield no event. */\n  readonly onActivity?: () => void\n}\n\ninterface RequestDescriptor {\n  readonly method: string\n  readonly path: string\n  readonly query?: Record<string, unknown>\n  readonly headers?: Record<string, unknown>\n  readonly body?: unknown\n  readonly successStatus: number\n  readonly declaredStatuses: ReadonlyArray<number>\n  readonly empty: boolean\n}\n\nconst maxSseEventBytes = 16 * 1024 * 1024\n\nexport function make(options: ClientOptions) {\n  const fetch = options.fetch ?? globalThis.fetch\n\n  const prepare = (descriptor: RequestDescriptor, requestOptions?: RequestOptions) => {\n    // A leading slash would replace any path prefix on baseUrl, so join relative to it.\n    const baseUrl = new URL(options.baseUrl)\n    if (!baseUrl.pathname.endsWith("/")) baseUrl.pathname += "/"\n    const url = new URL(descriptor.path.slice(1), baseUrl)\n    for (const [key, value] of Object.entries(descriptor.query ?? {})) appendQuery(url.searchParams, key, value)\n    const headers = new Headers(options.headers)\n    for (const [key, value] of Object.entries(descriptor.headers ?? {})) {\n      if (value !== undefined && value !== null) headers.set(key, String(value))\n    }\n    for (const [key, value] of new Headers(requestOptions?.headers)) headers.set(key, value)\n    if (descriptor.body !== undefined && !headers.has("content-type")) headers.set("content-type", "application/json")\n    return {\n      url,\n      init: {\n        method: descriptor.method,\n        signal: requestOptions?.signal,\n        headers,\n        body: descriptor.body === undefined ? undefined : JSON.stringify(descriptor.body),\n      } satisfies RequestInit,\n    }\n  }\n\n  const execute = async (descriptor: RequestDescriptor, requestOptions?: RequestOptions) => {\n    try {\n      const prepared = prepare(descriptor, requestOptions)\n      return await fetch(prepared.url, prepared.init)\n    } catch (cause) {\n      throw new ClientError("Transport", { cause })\n    }\n  }\n\n  const responseError = async (response: Response, descriptor: RequestDescriptor): Promise<never> => {\n    if (descriptor.declaredStatuses.includes(response.status)) throw declared(await json(response) as DeclaredErrorBody)\n    try {\n      await response.body?.cancel()\n    } catch {}\n    throw new ClientError("UnexpectedStatus", { cause: { status: response.status }, detail: String(response.status) })\n  }\n\n  const request = async <A>(descriptor: RequestDescriptor, requestOptions?: RequestOptions): Promise<A> => {\n    const response = await execute(descriptor, requestOptions)\n    if (response.status !== descriptor.successStatus) return responseError(response, descriptor)\n    if (descriptor.empty) {\n      try {\n        await response.body?.cancel()\n      } catch {}\n      return undefined as A\n    }\n    return await json(response) as A\n  }\n\n  const sse = <A>(descriptor: RequestDescriptor, requestOptions?: RequestOptions): AsyncIterable<A> => ({\n    async *[Symbol.asyncIterator]() {\n      const response = await execute(descriptor, requestOptions)\n      if (response.status !== descriptor.successStatus) await responseError(response, descriptor)\n      if (!isContentType(response, "text/event-stream")) {\n        try {\n          await response.body?.cancel()\n        } catch {}\n        throw new ClientError("UnsupportedContentType", { detail: response.headers.get("content-type") })\n      }\n      if (response.body === null) throw new ClientError("MalformedResponse")\n      const reader = response.body.getReader()\n      const decoder = new TextDecoder()\n      let buffer = ""\n      try {\n        while (true) {\n          let next: ReadableStreamReadResult<Uint8Array>\n          try {\n            next = await reader.read()\n          } catch (cause) {\n            throw new ClientError("Transport", { cause })\n          }\n          if (!next.done) requestOptions?.onActivity?.()\n          buffer += decoder.decode(next.value, { stream: !next.done })\n          if (buffer.length > maxSseEventBytes) throw new ClientError("SseEventTooLarge")\n          const trailingCarriageReturn = !next.done && buffer.endsWith("\\r")\n          if (trailingCarriageReturn) buffer = buffer.slice(0, -1)\n          buffer = buffer.replaceAll("\\r\\n", "\\n").replaceAll("\\r", "\\n")\n          if (trailingCarriageReturn) buffer += "\\r"\n          if (next.done && buffer !== "") buffer += "\\n\\n"\n          let boundary = buffer.indexOf("\\n\\n")\n          while (boundary >= 0) {\n            const block = buffer.slice(0, boundary)\n            buffer = buffer.slice(boundary + 2)\n            const data = block.split("\\n").flatMap((line) => line.startsWith("data:") ? [line.slice(5).trimStart()] : []).join("\\n")\n            if (data !== "") {\n              try {\n                yield JSON.parse(data) as A\n              } catch (cause) {\n                throw new ClientError("MalformedResponse", { cause })\n              }\n            }\n            boundary = buffer.indexOf("\\n\\n")\n          }\n          if (next.done) return\n        }\n      } finally {\n        try {\n          await reader.cancel()\n        } catch {}\n        reader.releaseLock()\n      }\n    },\n  })\n\n  return { ${fields.join(", ")} }\n}\n\nfunction appendQuery(params: URLSearchParams, key: string, value: unknown): void {\n  if (value === undefined) return\n  if (value === null) {\n    params.append(key, "null")\n    return\n  }\n  if (Array.isArray(value)) {\n    for (const item of value) appendQuery(params, key, item)\n    return\n  }\n  if (typeof value === "object") {\n    for (const [child, item] of Object.entries(value)) appendQuery(params, \`\${key}[\${child}]\`, item)\n    return\n  }\n  params.append(key, String(value))\n}\n\nasync function json(response: Response): Promise<unknown> {\n  if (!isContentType(response, "application/json") && !response.headers.get("content-type")?.includes("+json")) {\n    try {\n      await response.body?.cancel()\n    } catch {}\n    throw new ClientError("UnsupportedContentType", { detail: response.headers.get("content-type") })\n  }\n  let text: string\n  try {\n    text = await response.text()\n  } catch (cause) {\n    throw new ClientError("Transport", { cause })\n  }\n  if (text === "") throw new ClientError("MalformedResponse")\n  try {\n    return JSON.parse(text)\n  } catch (cause) {\n    throw new ClientError("MalformedResponse", { cause })\n  }\n}\n\ntype DeclaredErrorBody = { readonly _tag?: string; readonly message?: string; readonly data?: { readonly message?: string } }\n\n/** Throw declared error bodies as Errors. The body's fields stay on the error, so narrowing on \`_tag\` or \`name\` still works. */\nfunction declared(body: DeclaredErrorBody) {\n  const error = Object.assign(new Error(body.message ?? body.data?.message), body)\n  if (body._tag) error.name = body._tag\n  return error\n}\n\nfunction isContentType(response: Response, expected: string) {\n  return response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === expected\n}\n`
++  return `import type { ${imports.join(", ")} } from "./types.js"\nimport { ClientError } from "./client-error.js"\n\nexport interface ClientOptions {\n  readonly baseUrl: string\n  readonly fetch?: typeof globalThis.fetch\n  readonly headers?: RequestInit["headers"]\n}\n\nexport interface RequestOptions {\n  readonly signal?: AbortSignal\n  readonly headers?: RequestInit["headers"]\n  /** Reports every chunk a streaming response receives, including keepalive comments that yield no event. */\n  readonly onActivity?: () => void\n}\n\ninterface RequestDescriptor {\n  readonly method: string\n  readonly path: string\n  readonly query?: Record<string, unknown>\n  readonly headers?: Record<string, unknown>\n  readonly body?: unknown\n  readonly successStatus: number\n  readonly declaredStatuses: ReadonlyArray<number>\n  readonly empty: boolean\n}\n\nconst maxSseEventBytes = 16 * 1024 * 1024\n\nexport function make(options: ClientOptions) {\n  const fetch = options.fetch ?? globalThis.fetch\n\n  const prepare = (descriptor: RequestDescriptor, requestOptions?: RequestOptions) => {\n    // A leading slash would replace any path prefix on baseUrl, so join relative to it.\n    const baseUrl = new URL(options.baseUrl)\n    if (!baseUrl.pathname.endsWith("/")) baseUrl.pathname += "/"\n    const url = new URL(descriptor.path.slice(1), baseUrl)\n    for (const [key, value] of Object.entries(descriptor.query ?? {})) appendQuery(url.searchParams, key, value)\n    const headers = new Headers(options.headers)\n    for (const [key, value] of Object.entries(descriptor.headers ?? {})) {\n      if (value !== undefined && value !== null) headers.set(key, String(value))\n    }\n    for (const [key, value] of new Headers(requestOptions?.headers)) headers.set(key, value)\n    if (descriptor.body !== undefined && !headers.has("content-type")) headers.set("content-type", "application/json")\n    return {\n      url,\n      init: {\n        method: descriptor.method,\n        signal: requestOptions?.signal,\n        headers,\n        body: descriptor.body === undefined ? undefined : JSON.stringify(descriptor.body),\n      } satisfies RequestInit,\n    }\n  }\n\n  const execute = async (descriptor: RequestDescriptor, requestOptions?: RequestOptions) => {\n    try {\n      const prepared = prepare(descriptor, requestOptions)\n      return await fetch(prepared.url, prepared.init)\n    } catch (cause) {\n      throw new ClientError("Transport", { cause })\n    }\n  }\n\n  const responseError = async (response: Response, descriptor: RequestDescriptor): Promise<never> => {\n    if (descriptor.declaredStatuses.includes(response.status)) throw declared(await json(response) as DeclaredErrorBody)\n    try {\n      await response.body?.cancel()\n    } catch {}\n    throw new ClientError("UnexpectedStatus", { cause: { status: response.status }, detail: String(response.status) })\n  }\n\n  const request = async <A>(descriptor: RequestDescriptor, requestOptions?: RequestOptions): Promise<A> => {\n    const response = await execute(descriptor, requestOptions)\n    if (response.status !== descriptor.successStatus) return responseError(response, descriptor)\n    if (descriptor.empty) {\n      try {\n        await response.body?.cancel()\n      } catch {}\n      return undefined as A\n    }\n    return await json(response) as A\n  }\n\n  const sse = <A>(descriptor: RequestDescriptor, requestOptions?: RequestOptions): AsyncIterable<A> => ({\n    async *[Symbol.asyncIterator]() {\n      const response = await execute(descriptor, requestOptions)\n      if (response.status !== descriptor.successStatus) await responseError(response, descriptor)\n      if (!isContentType(response, "text/event-stream")) {\n        try {\n          await response.body?.cancel()\n        } catch {}\n        throw new ClientError("UnsupportedContentType", { detail: response.headers.get("content-type") })\n      }\n      if (response.body === null) throw new ClientError("MalformedResponse")\n      const reader = response.body.getReader()\n      const decoder = new TextDecoder()\n      let buffer = ""\n      try {\n        while (true) {\n          let next: ReadableStreamReadResult<Uint8Array>\n          try {\n            next = await reader.read()\n          } catch (cause) {\n            throw new ClientError("Transport", { cause })\n          }\n          if (!next.done) requestOptions?.onActivity?.()\n          buffer += decoder.decode(next.value, { stream: !next.done })\n          if (buffer.length > maxSseEventBytes) throw new ClientError("SseEventTooLarge")\n          const trailingCarriageReturn = !next.done && buffer.endsWith("\\r")\n          if (trailingCarriageReturn) buffer = buffer.slice(0, -1)\n          buffer = buffer.replaceAll("\\r\\n", "\\n").replaceAll("\\r", "\\n")\n          if (trailingCarriageReturn) buffer += "\\r"\n          if (next.done && buffer !== "") buffer += "\\n\\n"\n          let boundary = buffer.indexOf("\\n\\n")\n          while (boundary >= 0) {\n            const block = buffer.slice(0, boundary)\n            buffer = buffer.slice(boundary + 2)\n            const data = block.split("\\n").flatMap((line) => line.startsWith("data:") ? [line.slice(5).trimStart()] : []).join("\\n")\n            if (data !== "") {\n              try {\n                yield JSON.parse(data) as A\n              } catch (cause) {\n                throw new ClientError("MalformedResponse", { cause })\n              }\n            }\n            boundary = buffer.indexOf("\\n\\n")\n          }\n          if (next.done) return\n        }\n      } finally {\n        try {\n          await reader.cancel()\n        } catch {}\n        reader.releaseLock()\n      }\n    },\n  })\n\n  return { ${fields.join(", ")} }\n}\n\nfunction appendQuery(params: URLSearchParams, key: string, value: unknown): void {\n  if (value === undefined) return\n  if (value === null) {\n    params.append(key, "null")\n    return\n  }\n  if (Array.isArray(value)) {\n    for (const item of value) appendQuery(params, key, item)\n    return\n  }\n  if (typeof value === "object") {\n    for (const [child, item] of Object.entries(value)) appendQuery(params, \`\${key}[\${child}]\`, item)\n    return\n  }\n  params.append(key, String(value))\n}\n\nasync function json(response: Response): Promise<unknown> {\n  if (!isContentType(response, "application/json") && !response.headers.get("content-type")?.includes("+json")) {\n    try {\n      await response.body?.cancel()\n    } catch {}\n    throw new ClientError("UnsupportedContentType", { detail: describe(response) })\n  }\n  let text: string\n  try {\n    text = await response.text()\n  } catch (cause) {\n    throw new ClientError("Transport", { cause })\n  }\n  if (text === "") throw new ClientError("MalformedResponse")\n  try {\n    return JSON.parse(text)\n  } catch (cause) {\n    throw new ClientError("MalformedResponse", { cause })\n  }\n}\n\ntype DeclaredErrorBody = { readonly _tag?: string; readonly message?: string; readonly data?: { readonly message?: string } }\n\n/** Throw declared error bodies as Errors. The body's fields stay on the error, so narrowing on \`_tag\` or \`name\` still works. */\nfunction declared(body: DeclaredErrorBody) {\n  const error = Object.assign(new Error(body.message ?? body.data?.message), body)\n  if (body._tag) error.name = body._tag\n  return error\n}\n\n// ocelot: name the request, so an error without a JSON body still says where it came from.\nfunction describe(response: Response) {\n  const type = response.headers.get("content-type") ?? "no content-type"\n  let path = response.url\n  try {\n    path = new URL(response.url).pathname\n  } catch {}\n  return path ? \`\${type} (\${response.status} \${path})\` : \`\${type} (\${response.status})\`\n}\n\nfunction isContentType(response: Response, expected: string) {\n  return response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === expected\n}\n`
+ }
+ 
+ function promiseTypePrefix(group: string, path: ReadonlyArray<string>) {
+diff --git a/packages/server/src/process.ts b/packages/server/src/process.ts
+index 1c11586d6308d3f79d1501fb653911bda74f7a8b..a69782fea9fd2c8a5dce903707a3e8effd6be96e 100644
+--- a/packages/server/src/process.ts
++++ b/packages/server/src/process.ts
+@@ -9,7 +9,14 @@ import { hasPersistentPtyConnectTicketURL } from "@opencode/protocol/groups/pers
+ import { isPairingConnectURL } from "@opencode/protocol/groups/server"
+ import { Global } from "@opencode/util/global"
+ import { Cause, Context, Effect, Exit, Latch, Layer, Option, Ref, Scope } from "effect"
+-import { HttpMiddleware, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
++import {
++  HttpMiddleware,
++  HttpRouter,
++  HttpServer,
++  HttpServerError,
++  HttpServerRequest,
++  HttpServerResponse,
++} from "effect/unstable/http"
+ import { createServer } from "node:http"
+ import { ServerAuth } from "./auth"
+ import { isAllowedCorsOrigin } from "./cors"
+@@ -43,6 +50,36 @@ const errorResponseLogger = HttpMiddleware.make((app) =>
+   ),
+ )
+ 
++/**
++ * ocelot: an API request that fails without a response of its own (a defect, an unknown route)
++ * answers with a JSON error, like the declared ones, instead of an empty 500/404 the client can
++ * only report as "UnsupportedContentType". Defects are logged at ERROR.
++ */
++export const apiErrors = (app: App): App =>
++  Effect.gen(function* () {
++    const exit = yield* Effect.exit(app)
++    const request = yield* HttpServerRequest.HttpServerRequest
++    const path = new URL(request.url, "http://localhost").pathname
++    const response = Exit.isSuccess(exit) ? exit.value : (yield* HttpServerError.causeResponse(exit.cause))[0]
++    if (!path.startsWith("/api/") || response.body._tag !== "Empty" || (response.status !== 404 && response.status !== 500))
++      return yield* exit
++    const route = `${request.method} ${path}`
++    if (response.status === 404) {
++      yield* Effect.logWarning("no such route", { route })
++      return HttpServerResponse.jsonUnsafe(
++        { _tag: "RouteNotFound", message: `No such route: ${route}` },
++        { status: 404, headers: response.headers },
++      )
++    }
++    const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
++    const reason = error instanceof Error ? error.message : error === undefined ? "internal error" : String(error)
++    if (Exit.isFailure(exit)) yield* Effect.logError("request failed", { route, cause: Cause.pretty(exit.cause) })
++    return HttpServerResponse.jsonUnsafe(
++      { _tag: "InternalServerError", message: `${route} failed: ${reason.split("\n", 1)[0]!.slice(0, 500)}` },
++      { status: 500, headers: response.headers },
++    )
++  })
++
+ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
+   options: ServerOptions,
+   lifecycle?: Lifecycle<E, R>,
+@@ -67,6 +104,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
+   yield* bound.http
+     .serve(
+       (transform ? transform(app) : app).pipe(
++        apiErrors,
+         HttpMiddleware.compression(),
+         HttpMiddleware.cors({ allowedOrigins: (origin) => isAllowedCorsOrigin(origin, options), maxAge: 86_400 }),
+       ),
+diff --git a/packages/server/test/api-errors.test.ts b/packages/server/test/api-errors.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..291f0541d72c29ec560b7faa2a7e85108f563136
+--- /dev/null
++++ b/packages/server/test/api-errors.test.ts
+@@ -0,0 +1,49 @@
++import { expect, test } from "bun:test"
++import { Effect, Exit } from "effect"
++import { HttpServerError, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
++import { apiErrors } from "../src/process"
++
++const run = (path: string, app: Effect.Effect<HttpServerResponse.HttpServerResponse, unknown, any>) =>
++  Effect.runPromise(
++    apiErrors(app).pipe(
++      Effect.provideService(HttpServerRequest.HttpServerRequest, HttpServerRequest.fromWeb(new Request(`http://localhost${path}`))),
++      Effect.scoped,
++      Effect.exit,
++      Effect.map((exit) => (Exit.isSuccess(exit) ? exit.value : HttpServerError.exitResponse(exit))),
++      Effect.map((response) => HttpServerResponse.toWeb(response)),
++      Effect.flatMap((response) =>
++        Effect.promise(async () => ({
++          status: response.status,
++          type: response.headers.get("content-type"),
++          body: await response.text(),
++        })),
++      ),
++    ),
++  )
++
++test("a defect answers with a JSON error that names the request and the cause", async () => {
++  const response = await run("/api/session/ses_x/message", Effect.die(new Error("database disk image is malformed\nstack")))
++  expect(response.status).toBe(500)
++  expect(response.type).toBe("application/json")
++  expect(JSON.parse(response.body)).toEqual({
++    _tag: "InternalServerError",
++    message: "GET /api/session/ses_x/message failed: database disk image is malformed",
++  })
++})
++
++test("an unknown route answers with a JSON error", async () => {
++  const response = await run("/api/nope", Effect.succeed(HttpServerResponse.empty({ status: 404 })))
++  expect(response.status).toBe(404)
++  expect(JSON.parse(response.body)).toEqual({ _tag: "RouteNotFound", message: "No such route: GET /api/nope" })
++})
++
++test("responses with a body, and requests outside /api, are left alone", async () => {
++  const declared = HttpServerResponse.jsonUnsafe({ _tag: "SessionNotFoundError" }, { status: 404 })
++  expect(await run("/api/session/ses_x", Effect.succeed(declared))).toEqual({
++    status: 404,
++    type: "application/json",
++    body: '{"_tag":"SessionNotFoundError"}',
++  })
++  expect((await run("/assets/x.js", Effect.die(new Error("boom")))).body).toBe("")
++  expect((await run("/api/ok", Effect.succeed(HttpServerResponse.empty({ status: 204 })))).status).toBe(204)
++})

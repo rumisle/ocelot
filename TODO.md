@@ -155,9 +155,11 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          scrubber with turn positions.
 2. **Edit/branches polish.**
    - [ ] The ‹ n/m › switcher should fade with the other hover buttons, not stay visible.
-   - [ ] "Message not found" after a model switch + edit. Not in the server log (client-side?).
-         Suspect: a model switch while an edit is staged adds a marker message after the
-         boundary. Needs a repro.
+   - [x] "Message not found" after a model switch + edit. Cause: sending an edit with another model
+         selected switches the model (a marker message after the staged boundary), then commits the
+         edit, which parked the marker too; the client's read-back of the marker got a 404 (upstream
+         deletes it the same way). Fixed in core/message-branches: the selections at the end of the
+         parked range stay in the continuing history. Repro 3/3 before, 0/3 after (browser, dev server).
    - [ ] Edit feels slow: the web path interrupts, stages, then lists and cancels the inbox
          serially. Measure; make the UI optimistic.
 3. **Compaction** that works automatically end to end. opencode-vcc is not enough.
@@ -176,7 +178,9 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          editing a kept message undoes it, switching back restores it, forks before/after both correct.
    - [x] opencode-vcc removed from the config (its compaction hook result would win).
    - Note: on this machine 6 "config plugin reloads" tests and preload's "isolates global home and XDG roots"
-     fail on plain v2.0.19 too.
+     fail on plain v2.0.19 too. Since 2026-10-01 also 7 in test/plugin/{supervisor-reload,module}.test.ts
+     (plugin never activates: "RPC is unavailable: greeter"), again on plain v2.0.19 too, with an empty HOME
+     too. Environment; not investigated yet.
 4. **Background shell considered harmful.** How it works today (`tool/plugin/shell.ts`,
    `job.ts`): `shell {background: true}` returns at once; on completion the output is posted
    as a *synthetic* inbox item with delivery `steer`, which reaches the model as a **user-role
@@ -229,7 +233,7 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
    - [ ] Settings (shortcuts, auto-accept, ...) live in browser localStorage per device.
          Sync them through the server (core has a KV table; add an endpoint + a persistence
          adapter for the chosen namespaces).
-12. [ ] **Errors that say nothing.** A defect (e.g. SQLITE_CORRUPT) or an unknown route returns a 500/404
+12. [x] **Errors that say nothing.** Patch server/api-errors (JSON body + ERROR log; client error names status + path). A defect (e.g. SQLITE_CORRUPT) or an unknown route returns a 500/404
       with an empty body and no content-type; the web client then shows only
       "ClientError: UnsupportedContentType", and the defect is logged at INFO. Return a JSON error body
       for defects and unknown routes, log defects at ERROR, and have the client include status + path.
@@ -237,5 +241,5 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 13. [ ] **`job` helper instead of the tmux recipe** (agent-config): `job start NAME -- cmd`, `job wait ID`
       (≤ 90 s, re-callable; done = an `exit` file written by rename; process gone without it = died),
       `job log`, `job kill` (process group). Then shrink the AGENTS.md section, then item 4 step 1.
-11. [ ] Config watching fails: `~/.config/opencode` is a symlink (to agent-config) and the
+11. [x] (patch core/watch-symlinked-dir: watch the real directory, report paths under the link) Config watching fails: `~/.config/opencode` is a symlink (to agent-config) and the
       watcher errors "inotify_add_watch ... Not a directory", so config edits may not reload.

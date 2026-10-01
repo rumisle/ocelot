@@ -28,6 +28,78 @@ where it starts.
 
 Ocelot-Patch: core/checkpoint-compaction
 
+diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
+index e05af09eb627166cc35e9c4023fc9a9803ba74e6..ce8435a911969e2a57e6cc423a0deeab00a6d485 100644
+--- a/packages/client/src/effect/api/api.ts
++++ b/packages/client/src/effect/api/api.ts
+@@ -1294,6 +1294,7 @@ export type SessionLogOutput =
+               | undefined
+             readonly text: string
+             readonly recent: string
++            readonly keep?: { readonly id: SessionMessage.ID; readonly seq: number } | undefined
+             readonly cost?: (number & Brand.Brand<"Money.USD">) | undefined
+             readonly tokens?:
+               | {
+diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
+index d269c89d834a0f6a84bde3811cc4207b3d189576..38599b1fb93d588934a3218b2bb7d936f63477d6 100644
+--- a/packages/client/src/promise/generated/types.ts
++++ b/packages/client/src/promise/generated/types.ts
+@@ -1819,6 +1819,7 @@ export type SessionMessageCompactionCompleted = {
+   summary: string
+   recent: string
+   providerContext?: SessionProviderContext
++  keep?: { id: string; seq: number }
+   cost?: MoneyUSD
+   tokens?: TokenUsageInfo
+ }
+@@ -1838,6 +1839,7 @@ export type SessionCompactionEnded = {
+     providerContext?: SessionProviderContext
+     text: string
+     recent: string
++    keep?: { id: string; seq: number }
+     cost?: MoneyUSD
+     tokens?: TokenUsageInfo
+   }
+@@ -2126,7 +2128,14 @@ export type ConfigEntry =
+                 }
+           }
+         }
+-        compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: number }
++        compaction?: {
++          auto?: boolean
++          keep?: { tokens?: number }
++          buffer?: number
++          strategy?: "summary" | "checkpoint"
++          threshold?: { ratio?: number; tokens?: number }
++          timeout?: number
++        }
+         skills?: Array<string>
+         commands?: {
+           [x: string]: {
+@@ -3322,6 +3331,7 @@ export type SessionImportInput = {
+                 }
+                 readonly messages: JsonValue
+               }
++              readonly keep?: { readonly id: string; readonly seq: number }
+               readonly cost?: number
+               readonly tokens?: {
+                 readonly input: number
+@@ -3653,6 +3663,7 @@ export type SessionImportInput = {
+                 }
+                 readonly messages: JsonValue
+               }
++              readonly keep?: { readonly id: string; readonly seq: number }
+               readonly cost?: number
+               readonly tokens?: {
+                 readonly input: number
+@@ -3984,6 +3995,7 @@ export type SessionImportInput = {
+                 }
+                 readonly messages: JsonValue
+               }
++              readonly keep?: { readonly id: string; readonly seq: number }
+               readonly cost?: number
+               readonly tokens?: {
+                 readonly input: number
 diff --git a/packages/core/src/config/normalize.ts b/packages/core/src/config/normalize.ts
 index 2805cc04cd31b1ab024f3078975662dfc32104a2..8b1126314ac005deadf97290cf82aab9e15e1260 100644
 --- a/packages/core/src/config/normalize.ts

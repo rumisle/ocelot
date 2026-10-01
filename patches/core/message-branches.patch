@@ -359,10 +359,10 @@ index c2c2fd73db4c14b8338701c29bf3b3cfe19a200f..09e8e24a52dfa86359bb03cef5d62a1d
      return result
 diff --git a/packages/core/src/session/branch.ts b/packages/core/src/session/branch.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..812e83dbb21afa78df986b5176d149cb0e71afa1
+index 0000000000000000000000000000000000000000..60d69f846de2e606c64bb46a10643f5979b2cf0d
 --- /dev/null
 +++ b/packages/core/src/session/branch.ts
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,241 @@
 +export * as SessionBranch from "./branch.js"
 +
 +/**
@@ -447,13 +447,31 @@ index 0000000000000000000000000000000000000000..812e83dbb21afa78df986b5176d149cb
 +  return row?.seq
 +})
 +
-+/** Park every message from `boundarySeq` on as branch `id`. Runs inside the revert commit projection. */
++const selections = new Set(["model-switched", "agent-switched"])
++
++/**
++ * The model/agent selections at the end of the messages from `boundarySeq` on. They are the
++ * session's current selection, made while the edit was staged (the web app switches the model
++ * right before it sends the edit), so they belong to the history that continues, not to the
++ * parked one; the client also reads them back by id right after the commit.
++ */
++export const trailingSelections = Effect.fnUntraced(function* (db: Db, sessionID: SessionSchema.ID, boundarySeq: number) {
++  const rows = yield* rowsAfter(db, sessionID, boundarySeq - 1).pipe(Effect.orDie)
++  let start = rows.length
++  while (start > 0 && selections.has(rows[start - 1]!.type)) start--
++  return rows.slice(start).map((row) => row.id)
++})
++
++/** Park every message from `boundarySeq` on, except `keep`, as branch `id`. Runs inside the revert commit projection. */
 +export const park = Effect.fnUntraced(function* (
 +  db: Db,
-+  input: { id: string; sessionID: SessionSchema.ID; boundarySeq: number },
++  input: { id: string; sessionID: SessionSchema.ID; boundarySeq: number; keep?: readonly string[] },
 +) {
 +  yield* ensure(db)
-+  const rows = yield* rowsAfter(db, input.sessionID, input.boundarySeq - 1).pipe(Effect.orDie)
++  const keep = new Set(input.keep ?? [])
++  const rows = (yield* rowsAfter(db, input.sessionID, input.boundarySeq - 1).pipe(Effect.orDie)).filter(
++    (row) => !keep.has(row.id),
++  )
 +  if (rows.length === 0) return
 +  const anchor = yield* anchorBefore(db, input.sessionID, input.boundarySeq).pipe(Effect.orDie)
 +  yield* db
@@ -599,9 +617,17 @@ index d0a084f8729864a45da8b4454eada58dd42a415e..ac7348ad03452621d3179592b8b16bf5
    )
    return project(event)
 diff --git a/packages/core/src/session/projector.ts b/packages/core/src/session/projector.ts
-index 665c6d0c9cd70118828a68836b6f2158f584157c..5ab4bbd3df39f25e02d1a679c826e43079c5c8a0 100644
+index 665c6d0c9cd70118828a68836b6f2158f584157c..cba2cec94cbd3808b6022b76b106d9e1396f5785 100644
 --- a/packages/core/src/session/projector.ts
 +++ b/packages/core/src/session/projector.ts
+@@ -1,6 +1,6 @@
+ export * as SessionProjector from "./projector.js"
+ 
+-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm"
++import { and, asc, desc, eq, gt, gte, inArray, isNull, notInArray, lt, lte, or, sql } from "drizzle-orm"
+ import { DateTime, Effect, Layer, Schema, Stream } from "effect"
+ import path from "path"
+ import { Database } from "../database/database.js"
 @@ -14,6 +14,7 @@ import { SessionMessageUpdater } from "./message-updater.js"
  import { SessionInbox } from "./inbox.js"
  import { Workspace } from "@opencode/schema/workspace"
@@ -610,16 +636,32 @@ index 665c6d0c9cd70118828a68836b6f2158f584157c..5ab4bbd3df39f25e02d1a679c826e430
  import { SessionInboxTable, SessionMessageTable, SessionTable } from "./sql.js"
  import { InstructionEntry } from "./instruction-entry.js"
  import { Slug } from "../util/slug.js"
-@@ -773,6 +774,8 @@ const layer = Layer.effectDiscard(
+@@ -773,10 +774,23 @@ const layer = Layer.effectDiscard(
            .get()
            .pipe(Effect.orDie)
          if (!boundary) return yield* Effect.die(new Error(`Revert boundary message not found: ${event.data.to}`))
-+        // ocelot: keep the reverted messages as a branch the user can switch back to.
-+        yield* SessionBranch.park(db, { id: `brn_${event.id}`, sessionID: event.data.sessionID, boundarySeq: boundary.seq })
++        // ocelot: keep the reverted messages as a branch the user can switch back to; the
++        // selections made while the edit was staged stay with the history that continues.
++        const keep = yield* SessionBranch.trailingSelections(db, event.data.sessionID, boundary.seq)
++        yield* SessionBranch.park(db, {
++          id: `brn_${event.id}`,
++          sessionID: event.data.sessionID,
++          boundarySeq: boundary.seq,
++          keep,
++        })
          yield* db
            .delete(SessionMessageTable)
            .where(
-@@ -799,6 +802,19 @@ const layer = Layer.effectDiscard(
+-            and(eq(SessionMessageTable.session_id, event.data.sessionID), gte(SessionMessageTable.seq, boundary.seq)),
++            and(
++              eq(SessionMessageTable.session_id, event.data.sessionID),
++              gte(SessionMessageTable.seq, boundary.seq),
++              ...(keep.length > 0 ? [notInArray(SessionMessageTable.id, keep as SessionMessage.ID[])] : []),
++            ),
+           )
+           .run()
+           .pipe(Effect.orDie)
+@@ -799,6 +813,19 @@ const layer = Layer.effectDiscard(
          yield* InstructionState.reset(db, event.data.sessionID)
        }),
      )
@@ -783,7 +825,7 @@ index 327071b56771600d26c84e005d6654b883dc31c4..00e3801616ff6b2c4e6b3c57f99d069b
    )
  })
 diff --git a/packages/core/test/session-revert.test.ts b/packages/core/test/session-revert.test.ts
-index bc3906857760aabf417b6e663482a9ec360e5439..6638afb5df309c87bdcc27c7c2a7ad573ffa6807 100644
+index bc3906857760aabf417b6e663482a9ec360e5439..cce2e934720467e3b11903debbbc24a3e1db1e57 100644
 --- a/packages/core/test/session-revert.test.ts
 +++ b/packages/core/test/session-revert.test.ts
 @@ -3,6 +3,7 @@ import { describe, expect } from "bun:test"
@@ -834,7 +876,7 @@ index bc3906857760aabf417b6e663482a9ec360e5439..6638afb5df309c87bdcc27c7c2a7ad57
            expect((yield* session.get(created.id)).revert).toBeUndefined()
          }).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
        }),
-@@ -119,3 +110,107 @@ describe("Session.revert files", () => {
+@@ -119,3 +110,126 @@ describe("Session.revert files", () => {
      { timeout: 15_000 },
    )
  })
@@ -927,6 +969,25 @@ index bc3906857760aabf417b6e663482a9ec360e5439..6638afb5df309c87bdcc27c7c2a7ad57
 +          // The next turn continues the restored history.
 +          yield* turn("four")
 +          expect(yield* prompts()).toEqual(["one", "two", "three B", "four"])
++
++          // A model switch made while an edit is staged (the web app switches right before it
++          // sends) stays with the continuing history; an earlier one is parked with its branch.
++          const model = (id: string) => ({ id: Model.ID.make(id), providerID: Provider.ID.make("test-provider") })
++          const switched = Effect.fnUntraced(function* () {
++            return (yield* session.context(sessionID)).flatMap((message) =>
++              message.type === "model-switched" ? [message.model.id] : message.type === "user" ? [message.text] : [],
++            )
++          })
++          yield* session.switchModel({ sessionID, model: model("model-a") })
++          const five = yield* turn("five")
++          yield* session.revert.stage({ sessionID, messageID: five.user })
++          yield* session.switchModel({ sessionID, model: model("model-b") })
++          const marker = (yield* session.context(sessionID)).findLast((message) => message.type === "model-switched")!
++          yield* turn("five B")
++          expect(yield* switched()).toEqual(["one", "two", "three B", "four", "model-a", "model-b", "five B"])
++          expect(yield* session.message({ sessionID, messageID: marker.id })).toBeDefined()
++          yield* switchTo("five")
++          expect(yield* switched()).toEqual(["one", "two", "three B", "four", "model-a", "five"])
 +
 +          // A stale or foreign branch id is refused.
 +          expect((yield* session.branch.switch({ sessionID, branchID: "brn_missing" })).switched).toBe(false)

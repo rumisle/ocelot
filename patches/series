@@ -23,3 +23,5 @@ cli/restart-when-idle.patch
 server/session-cookie.patch
 web/file-download.patch
 core/checkpoint-compaction.patch
+core/watch-symlinked-dir.patch
+server/api-errors.patch

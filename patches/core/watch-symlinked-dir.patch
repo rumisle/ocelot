@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Thu, 1 Oct 2026 22:06:30 +0800
+Subject: core/watcher: watch a symlinked config directory
+
+@parcel/watcher refuses a symlinked directory (inotify: "Not a directory"), so a
+~/.config/opencode linked into a dotfiles repo was never watched and config edits
+needed a restart. Watch the real directory and report paths under the link.
+
+Ocelot-Patch: core/watch-symlinked-dir
+
+diff --git a/packages/core/src/filesystem/watcher.ts b/packages/core/src/filesystem/watcher.ts
+index b5c438661d0b167392370e6a7e597dbc78cffbcf..96c928d286c675b34fa8f8f39f0aa25e92224431 100644
+--- a/packages/core/src/filesystem/watcher.ts
++++ b/packages/core/src/filesystem/watcher.ts
+@@ -8,7 +8,7 @@ import { makeGlobalNode } from "@opencode/util/effect/app-node"
+ import { FSUtil } from "@opencode/util/fs-util"
+ import { Cause, Context, Effect, Layer, PubSub, RcMap, Schema, Stream } from "effect"
+ import { lazy } from "../util/lazy.js"
+-import { watch } from "node:fs"
++import { realpathSync, watch } from "node:fs"
+ import path from "path"
+ import loadBinding from "./watcher-binding.js"
+ 
+@@ -246,13 +246,19 @@ function subscribeDirectory(
+       Effect.as(undefined),
+     )
+   }
++  // ocelot: Parcel refuses a symlinked directory (inotify: "Not a directory"), e.g. a
++  // ~/.config/opencode linked into a dotfiles repo. Watch the real directory and report
++  // paths under the one the caller asked for.
++  const real = realDirectory(directory)
++  const outside = (file: string) => (real === directory ? file : rebase(file, real, directory))
++  const inside = (file: string) => (real === directory ? file : rebase(file, directory, real))
+   const callback: ParcelWatcher.SubscribeCallback = (error, updates) => {
+     if (error) Effect.runFork(Effect.logError("watcher callback failed", { error }))
+-    for (const update of updates) publish(update)
++    for (const update of updates) publish(real === directory ? update : { ...update, path: outside(update.path) })
+   }
+   // Copy `ignore`: it aliases the RcMap key, whose structural hash is cached,
+   // so the array handed to native code must never be the mutable original.
+-  const pending = native.subscribe(directory, callback, { ignore: [...ignore], backend })
++  const pending = native.subscribe(real, callback, { ignore: ignore.map(inside), backend })
+   return Effect.promise(() => pending).pipe(
+     Effect.map((subscription) => ({ unsubscribe: () => subscription.unsubscribe(), backend })),
+     // Interruption (including the timeout below) abandons the pending native
+@@ -271,3 +277,18 @@ function subscribeDirectory(
+     ),
+   )
+ }
++
++function realDirectory(directory: string) {
++  try {
++    return realpathSync(directory)
++  } catch {
++    return directory
++  }
++}
++
++/** `file` moved from under `from` to under `to`; paths outside `from` stay as they are. */
++function rebase(file: string, from: string, to: string) {
++  if (file === from) return to
++  if (file.startsWith(from + path.sep)) return to + file.slice(from.length)
++  return file
++}
+diff --git a/packages/core/test/filesystem/watcher.test.ts b/packages/core/test/filesystem/watcher.test.ts
+index feaaeecb8fec7d91b4f87f09dd296c8f92f6060c..63f1857d2b4dd1acab9d077b49cdfec99ba74097 100644
+--- a/packages/core/test/filesystem/watcher.test.ts
++++ b/packages/core/test/filesystem/watcher.test.ts
+@@ -149,6 +149,44 @@ describe("Watcher lifecycle", () => {
+     ),
+   )
+ 
++  it.live("watches a symlinked directory and reports paths under the link", () =>
++    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
++      Effect.flatMap((tmp) =>
++        Effect.gen(function* () {
++          const native = yield* Watcher.Native
++          const events: Watcher.Update[] = []
++          const real = path.join(tmp.path, "dotfiles", "opencode")
++          const link = path.join(tmp.path, "config-opencode")
++          yield* Effect.promise(async () => {
++            await fs.mkdir(path.join(real, "ignored"), { recursive: true })
++            await fs.symlink(real, link)
++          })
++          const subscription = yield* Effect.acquireRelease(
++            native.subscribe({
++              type: "directory",
++              target: link,
++              ignore: [path.join(link, "ignored")],
++              publish: (update) => events.push(update),
++            }),
++            (subscription) => Effect.promise(() => subscription?.unsubscribe() ?? Promise.resolve()),
++          )
++          expect(subscription).toBeDefined()
++          yield* Effect.promise(async () => {
++            await fs.writeFile(path.join(real, "ignored", "skip.json"), "ignored")
++            await fs.writeFile(path.join(real, "opencode.jsonc"), "{}")
++          })
++          yield* Effect.sync(() => events.some((update) => update.path === path.join(link, "opencode.jsonc"))).pipe(
++            Effect.filterOrFail(Boolean),
++            Effect.retry(Schedule.spaced("10 millis")),
++            Effect.timeout("2 seconds"),
++          )
++          expect(events.every((update) => update.path.startsWith(link + path.sep))).toBe(true)
++          expect(events.some((update) => update.path.includes("skip.json"))).toBe(false)
++        }).pipe(Effect.provide(Watcher.nativeLayer)),
++      ),
++    ),
++  )
++
+   it.effect("interrupting a consumer interrupts a pending acquisition", () =>
+     Effect.gen(function* () {
+       const started = yield* Deferred.make<void>()
