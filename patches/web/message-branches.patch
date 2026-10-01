@@ -94,33 +94,13 @@ index 7b7a4bfdd923ff6d7188a289ba6227a5a44ead33..af20f435e624f1d6b08d5c37e58c1866
 +  next?: () => Promise<void> | void
  }
 diff --git a/packages/session-ui/src/components/message-part.css b/packages/session-ui/src/components/message-part.css
-index c30c36b9115503892dac4ac4b5cea08faffa7064..c493bc0a7b0a573493a277ef35a09525826d2ac3 100644
+index c30c36b9115503892dac4ac4b5cea08faffa7064..94d38406619d506d2d0feb89018882cb7be0acb0 100644
 --- a/packages/session-ui/src/components/message-part.css
 +++ b/packages/session-ui/src/components/message-part.css
-@@ -216,6 +216,48 @@
+@@ -216,6 +216,28 @@
      pointer-events: auto;
    }
  
-+  /* ocelot: the version switcher stays visible; only the other actions wait for hover. */
-+  [data-slot="user-message-copy-wrapper"][data-branch] {
-+    opacity: 1;
-+    pointer-events: auto;
-+
-+    @media (hover: hover) {
-+      > :not([data-slot="user-message-branch"]) {
-+        opacity: 0;
-+        pointer-events: none;
-+        transition: opacity 0.15s ease;
-+      }
-+    }
-+  }
-+
-+  &:hover [data-slot="user-message-copy-wrapper"][data-branch] > *,
-+  &:focus-within [data-slot="user-message-copy-wrapper"][data-branch] > * {
-+    opacity: 1;
-+    pointer-events: auto;
-+  }
-+
 +  [data-slot="user-message-branch"] {
 +    display: inline-flex;
 +    align-items: center;
@@ -165,7 +145,7 @@ index 97427b5bf9705331daf1fd6cf98e1a0b18d84576..c33e862acac09db7dc532688f42bc8d0
  export { currentContentDefaultOpen } from "./current-tool-state"
  
 diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
-index c965aeb1efe5bcfcc1ab358acaad8458c669fec3..00f4c9bd7b5a7d6d077573746d1e26251d603419 100644
+index c965aeb1efe5bcfcc1ab358acaad8458c669fec3..00f88362efdab1ed4a70886ab276cff4cf059b9a 100644
 --- a/packages/session-ui/src/message/message-content.tsx
 +++ b/packages/session-ui/src/message/message-content.tsx
 @@ -54,7 +54,7 @@ export async function writeClipboard(text: string): Promise<boolean> {
@@ -196,12 +176,10 @@ index c965aeb1efe5bcfcc1ab358acaad8458c669fec3..00f4c9bd7b5a7d6d077573746d1e2625
    const attachments = createMemo(() => (props.message.files ?? []).filter(attached))
    const references = createMemo(() => props.references ?? [])
    const inlineFiles = createMemo(() => (props.message.files ?? []).filter((file) => !!file.mention))
-@@ -297,10 +307,45 @@ export function CurrentUserMessageDisplay(props: {
-       </Show>
+@@ -298,9 +308,44 @@ export function CurrentUserMessageDisplay(props: {
        {renderAttachments()}
        <Show when={props.text || comments().length > 0}>
--        <div data-slot="user-message-copy-wrapper">
-+        <div data-slot="user-message-copy-wrapper" data-branch={branch() ? "" : undefined}>
+         <div data-slot="user-message-copy-wrapper">
 +          <Show when={branch()}>
 +            {(current) => (
 +              <div data-slot="user-message-branch">

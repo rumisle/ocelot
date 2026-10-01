@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Thu, 1 Oct 2026 23:48:47 +0800
+Subject: app/updates: the titlebar Update pill for an ocelot service
+
+A service that restarts into a new binary once idle reports it through
+/api/ocelot/restart. The web app shows upstream's titlebar "Update" pill (the
+desktop updater's), which restarts the server now and reloads into the new UI;
+after a restart the stale page offers a reload the same way.
+
+Ocelot-Patch: web/service-update
+
+diff --git a/packages/app/src/runtime/platform/web-updater.ts b/packages/app/src/runtime/platform/web-updater.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..66b741db23ff7edaa11a460ae97547bec8ddc7d1
+--- /dev/null
++++ b/packages/app/src/runtime/platform/web-updater.ts
+@@ -0,0 +1,77 @@
++import { createSignal } from "solid-js"
++import type { UpdaterPlatform, UpdaterState } from "@/shell/updates/types"
++
++/**
++ * ocelot: the titlebar "Update" pill for the web app served by an ocelot service. A server that
++ * restarts into a new binary once idle (`ocelot service set restart idle`) reports it through
++ * `/api/ocelot/restart`; the pill restarts it now and reloads into the new UI. After a restart the
++ * page itself is stale, and the pill reloads it. Requests are same-origin and use the session cookie.
++ */
++export function createWebUpdater(): UpdaterPlatform {
++  const [state, setState] = createSignal<UpdaterState>({ status: "idle" })
++  // The server version that served this page, i.e. the version of the UI it runs.
++  let loaded: string | undefined
++  let mode: "restart" | "reload" | undefined
++
++  const read = async (path: string) => {
++    const response = await fetch(path, { credentials: "same-origin", headers: { accept: "application/json" } })
++    if (!response.ok) return undefined
++    return (await response.json()) as Record<string, unknown>
++  }
++  const server = async () => {
++    const info = await read("/api/info")
++    const data = (info?.data ?? info) as { version?: unknown; pid?: unknown } | undefined
++    return typeof data?.version === "string" ? { version: data.version, pid: data.pid } : undefined
++  }
++  const serverVersion = async () => (await server())?.version
++
++  const check = async (): Promise<UpdaterState> => {
++    const current = state()
++    if (current.status === "installing" || current.status === "disabled") return current
++    const next = await (async (): Promise<UpdaterState> => {
++      const version = await serverVersion()
++      if (version === undefined) return state()
++      loaded ??= version
++      if (version !== loaded) {
++        mode = "reload"
++        return { status: "ready", version }
++      }
++      const restart = await read("/api/ocelot/restart")
++      if (restart === undefined) {
++        mode = undefined
++        return { status: "disabled" }
++      }
++      if (restart.pending === true) {
++        mode = "restart"
++        return { status: "ready", version: typeof restart.version === "string" ? restart.version : version }
++      }
++      mode = undefined
++      return { status: "up-to-date" }
++    })().catch(() => state())
++    setState(next)
++    return next
++  }
++
++  const install = async () => {
++    if (mode === "reload") return location.reload()
++    if (mode !== "restart") return
++    const before = await server()
++    setState({ status: "installing", version: state().status === "ready" ? (state() as { version: string }).version : "" })
++    await fetch("/api/ocelot/restart", { method: "POST", credentials: "same-origin" }).catch(() => undefined)
++    // Reload once a new server process answers (or after two minutes regardless).
++    const deadline = Date.now() + 120_000
++    while (Date.now() < deadline) {
++      await new Promise((resolve) => setTimeout(resolve, 1_000))
++      const after = await server().catch(() => undefined)
++      if (after !== undefined && (after.pid !== before?.pid || after.version !== before?.version)) break
++    }
++    location.reload()
++  }
++
++  void check()
++  setInterval(() => void check(), 30_000)
++  document.addEventListener("visibilitychange", () => {
++    if (document.visibilityState === "visible") void check()
++  })
++  return { state, check, install }
++}
+diff --git a/packages/app/src/runtime/platform/web.ts b/packages/app/src/runtime/platform/web.ts
+index 43bb69363aecc5e8d9ab603811cf2f950f786641..b5d0de163386c385b37646c27e0c35768083b889 100644
+--- a/packages/app/src/runtime/platform/web.ts
++++ b/packages/app/src/runtime/platform/web.ts
+@@ -1,6 +1,7 @@
+ import { createBrowserDraftStore } from "@/runtime/persistence/drafts"
+ import { ServerConnection } from "@/runtime/server/registry"
+ import type { Platform } from "./platform"
++import { createWebUpdater } from "./web-updater"
+ 
+ const DEFAULT_SERVER_URL_KEY = "opencode.settings.dat:defaultServerUrl"
+ 
+@@ -43,6 +44,8 @@ export function createWebPlatform(version: string) {
+       return stored ? ServerConnection.Key.make(stored) : null
+     },
+     setDefaultServer: writeDefaultServerUrl,
++    // ocelot: the app is served by the server it talks to (not a dev server or a hosted app).
++    updater: import.meta.env.PROD && currentServerUrl === location.origin ? createWebUpdater() : undefined,
+   }
+ 
+   return {

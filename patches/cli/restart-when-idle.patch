@@ -92,7 +92,7 @@ index ade0a391993d5fa3da34b5398e08fc49cff29476..5ee14b8c78adb6444e4fdbf42d07f71f
    }),
  )
 diff --git a/packages/cli/src/server-process.ts b/packages/cli/src/server-process.ts
-index cce3a2c53b9969f49ea9b5276342fc436f5571c0..7712161d8631118a0bad860a83f3ec50956984da 100644
+index cce3a2c53b9969f49ea9b5276342fc436f5571c0..755ddbf783f990c0b0cf1b082bcd2962096e509d 100644
 --- a/packages/cli/src/server-process.ts
 +++ b/packages/cli/src/server-process.ts
 @@ -15,6 +15,7 @@ import { ServiceConfig } from "./services/service-config"
@@ -103,7 +103,19 @@ index cce3a2c53b9969f49ea9b5276342fc436f5571c0..7712161d8631118a0bad860a83f3ec50
  import { databasePath } from "./database-path"
  
  export type Mode = "default" | "service" | "stdio"
-@@ -162,6 +163,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
+@@ -83,7 +84,10 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
+             : randomBytes(32).toString("base64url")
+       if (!password) return yield* Effect.fail(new Error("Missing server password"))
+       const instanceID = randomUUID()
+-      const transform = yield* WebUi.handler()
++      const webUi = yield* WebUi.handler()
++      // ocelot: the web app's "Update" button (pending restart, restart now).
++      const restart = serviceOptions === undefined ? undefined : yield* IdleRestart.routes(serviceOptions.file, password)
++      const transform: typeof webUi = restart === undefined ? webUi : (app) => restart(webUi(app))
+       const server = yield* start(
+         {
+           app: {
+@@ -162,6 +166,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
        const url = HttpServer.formatAddress(server.address)
        console.log(options.mode === "stdio" ? JSON.stringify({ url }) : `server listening on ${url}`)
        if (foreground && !environmentPassword) console.log(`server password ${password}`)
@@ -113,16 +125,20 @@ index cce3a2c53b9969f49ea9b5276342fc436f5571c0..7712161d8631118a0bad860a83f3ec50
          : options.mode === "stdio"
 diff --git a/packages/cli/src/services/idle-restart.ts b/packages/cli/src/services/idle-restart.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..1f487e2300fae66f505d15f9ab162ea1055deeda
+index 0000000000000000000000000000000000000000..5d4af22d1d50b0a1bdf4943645b306032e17de54
 --- /dev/null
 +++ b/packages/cli/src/services/idle-restart.ts
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,191 @@
 +export * as IdleRestart from "./idle-restart"
 +
 +import { Service, type EnsureOptions } from "@opencode/client/effect/service"
 +import { OpenCode } from "@opencode/client/promise"
-+import { spawn } from "node:child_process"
++import { ServerAuth } from "@opencode/server/auth"
++import { authorizedRequest, unauthorizedResponse } from "@opencode/server/middleware/authorization"
++import { spawn, spawnSync } from "node:child_process"
++import { statSync } from "node:fs"
 +import { Effect, FileSystem, Option, Schedule, Schema } from "effect"
++import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 +import { selfCommand } from "../util/process"
 +import { ServiceConfig } from "./service-config"
 +
@@ -130,7 +146,8 @@ index 0000000000000000000000000000000000000000..1f487e2300fae66f505d15f9ab162ea1
 +// A detached waiter (`service restart --idle-waiter`, spawned by `request`) polls the server's
 +// running sessions and, after QUIET without any, replaces it the way a newer client does:
 +// persistent terminals are handed over, and the new server is started from the binary on disk.
-+// Its progress is `<registration>.restart`, which `service status` shows.
++// Its progress is `<registration>.restart`, which `service status` shows. `<registration>.restart-now`
++// (written by the web app's "Update" button through `routes`) makes it restart without waiting.
 +
 +export const QUIET = 30_000
 +
@@ -190,7 +207,9 @@ index 0000000000000000000000000000000000000000..1f487e2300fae66f505d15f9ab162ea1
 +    )
 +    idleSince = running?.length === 0 ? (idleSince ?? Date.now()) : undefined
 +    yield* write({ waiter: process.pid, server: server.pid, running: running ?? [], idleSince })
-+    if (idleSince !== undefined && Date.now() - idleSince >= QUIET) {
++    const now = yield* fs.exists(options.file + ".restart-now").pipe(Effect.orElseSucceed(() => false))
++    if (now || (idleSince !== undefined && Date.now() - idleSince >= QUIET)) {
++      yield* fs.remove(options.file + ".restart-now").pipe(Effect.ignore)
 +      yield* Effect.logInfo("restarting the idle server", { server: server.pid, version: server.version })
 +      yield* Service.stop({ file: options.file, pty: "handoff" })
 +      yield* Service.ensure({ ...options, version: undefined })
@@ -222,6 +241,45 @@ index 0000000000000000000000000000000000000000..1f487e2300fae66f505d15f9ab162ea1
 +  )
 +  return existing
 +})
++
++/**
++ * In the server: `GET /api/ocelot/restart` reports a pending restart and the version it restarts
++ * into; `POST` restarts now (it starts a waiter if none is waiting). Authenticated like the API.
++ */
++export const routes = Effect.fnUntraced(function* (file: string, password: string) {
++  const fs = yield* FileSystem.FileSystem
++  const auth: ServerAuth.Info = { password: Option.some(password), username: "opencode" }
++  const pending = status(file).pipe(Effect.provideService(FileSystem.FileSystem, fs))
++  return <E, R>(app: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
++    Effect.gen(function* () {
++      const incoming = yield* HttpServerRequest.HttpServerRequest
++      if (new URL(incoming.url, "http://localhost").pathname !== "/api/ocelot/restart") return yield* app
++      if (!(yield* authorizedRequest(incoming, auth))) return unauthorizedResponse(incoming)
++      if (incoming.method === "POST") {
++        yield* fs.writeFileString(file + ".restart-now", String(Date.now()), { mode: 0o600 }).pipe(Effect.orDie)
++        yield* request(file).pipe(Effect.provideService(FileSystem.FileSystem, fs))
++        return HttpServerResponse.jsonUnsafe({ restarting: true })
++      }
++      if (incoming.method !== "GET") return HttpServerResponse.empty({ status: 405 })
++      const waiting = (yield* pending) !== undefined
++      return HttpServerResponse.jsonUnsafe({ pending: waiting, version: waiting ? installedVersion() : undefined })
++    })
++})
++
++let installed: { stamp: string; version: string | undefined } | undefined
++/** The version of the binary at our own path, which a restart starts. */
++function installedVersion() {
++  const command = selfCommand()
++  if (command.length !== 1) return undefined
++  const stat = statSync(command[0]!, { throwIfNoEntry: false })
++  if (!stat) return undefined
++  const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`
++  if (installed?.stamp === stamp) return installed.version
++  const output = spawnSync(command[0]!, ["--version"], { encoding: "utf8", timeout: 10_000 }).stdout ?? ""
++  const version = output.trim().split(/\s+/).at(-1)?.replace(/^v/, "") || undefined
++  installed = { stamp, version }
++  return version
++}
 +
 +/** In the server: with `restart idle`, a new binary at our own path restarts us once idle. */
 +export const watch = Effect.fnUntraced(function* (file: string) {

@@ -42,8 +42,10 @@ Open:
       TUI meeting a busy server restart it once no session has run for 30 s; `service restart
       --when-idle` asks for it regardless; `service status` shows it. `scripts/install.sh` follows
       the setting (`--now` / `--when-idle`).
-  - [ ] Web app banner: "update installed, restarts when idle · Restart now", and reload into the
-        new UI after the restart when the composer is empty.
+  - [x] Web app: upstream's titlebar "Update" pill (patch web/service-update + routes in
+        cli/restart-when-idle: GET/POST /api/ocelot/restart). Shows while a restart is pending (version
+        of the new binary on hover); click restarts now and reloads; a stale page after a restart offers
+        a reload the same way. Small icon instead of a banner, so nothing to dismiss. Desktop + phone checked.
   - [ ] A session waiting on a permission/question counts as running, so it holds the restart back
         until answered. Decide whether that should count as idle (check that resume restores the prompt).
       Accepted: the restarted server inherits the waiter's environment (the old server's, or the
@@ -154,14 +156,16 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
    - [ ] Orientation while scrolling back: e.g. a sticky "which turn am I in" header or
          scrubber with turn positions.
 2. **Edit/branches polish.**
-   - [ ] The ‹ n/m › switcher should fade with the other hover buttons, not stay visible.
+   - [x] The ‹ n/m › switcher fades with the other hover buttons (always shown on touch screens).
    - [x] "Message not found" after a model switch + edit. Cause: sending an edit with another model
          selected switches the model (a marker message after the staged boundary), then commits the
          edit, which parked the marker too; the client's read-back of the marker got a 404 (upstream
          deletes it the same way). Fixed in core/message-branches: the selections at the end of the
          parked range stay in the continuing history. Repro 3/3 before, 0/3 after (browser, dev server).
    - [ ] Edit feels slow: the web path interrupts, stages, then lists and cancels the inbox
-         serially. Measure; make the UI optimistic.
+         serially. Measured 2026-10-01: stage is 2-17 ms on the server (long session copy); in the
+         browser the composer fills in 1-16 ms and the messages hide in 34-46 ms, idle or running.
+         Not reproduced; need the case (phone? a running tool? a very long session?).
 3. **Compaction** that works automatically end to end. opencode-vcc is not enough.
    - [x] Step 1: patch `core/checkpoint-compaction`, opt-in with `"compaction": { "strategy": "checkpoint" }`.
          Compacts at min(90% of the window, 540k) (`threshold.ratio` / `threshold.tokens`). The checkpoint is a
@@ -180,7 +184,8 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
    - Note: on this machine 6 "config plugin reloads" tests and preload's "isolates global home and XDG roots"
      fail on plain v2.0.19 too. Since 2026-10-01 also 7 in test/plugin/{supervisor-reload,module}.test.ts
      (plugin never activates: "RPC is unavailable: greeter"), again on plain v2.0.19 too, with an empty HOME
-     too. Environment; not investigated yet.
+     too. Environment; not investigated yet. packages/cli test/updater-install.test.ts (22) fails by design:
+     patch ocelot/updates installs from GitHub releases, not npm.
 4. **Background shell considered harmful.** How it works today (`tool/plugin/shell.ts`,
    `job.ts`): `shell {background: true}` returns at once; on completion the output is posted
    as a *synthetic* inbox item with delivery `steer`, which reaches the model as a **user-role
