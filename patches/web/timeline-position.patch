@@ -1,0 +1,309 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 2 Oct 2026 00:55:49 +0800
+Subject: app/timeline: reopen a session where it was left after a reload
+
+Like Telegram: the row at the top of the viewport (timeline key, with the turn
+as fallback, and the offset into it) is saved per session in localStorage
+shortly after scrolling and when the page hides; following the newest content
+saves "at the bottom". After a reload (iOS discarding the page, a new tab)
+the timeline loads older pages down to that turn and restores the row and
+offset. In-app session switches keep their live views as before.
+
+Ocelot-Patch: web/timeline-position
+
+diff --git a/packages/app/src/session/screen.tsx b/packages/app/src/session/screen.tsx
+index 05d35f9db278733373c3a9bb44ddabac8aa54c0e..bc7dbe06eb5849da2cd53534b44d39cc628ab7c2 100644
+--- a/packages/app/src/session/screen.tsx
++++ b/packages/app/src/session/screen.tsx
+@@ -278,6 +278,7 @@ function SessionScreenContent(props: { session: SessionModel; browser: ReturnTyp
+         anchor={timeline.view.anchor}
+         setRevealMessage={timeline.view.setRevealMessage}
+         setScrollToEnd={timeline.view.setScrollToEnd}
++        setPositionApi={timeline.view.setPositionApi}
+         search={
+           <Show when={active()}>
+             <TimelineSearchBar controller={timelineSearch} />
+diff --git a/packages/app/src/session/timeline/interaction.ts b/packages/app/src/session/timeline/interaction.ts
+index 62799a7b800541f5e84d10cbfd2b8788f22b8b2b..15bf2dd7a5d8cc311e3f01d592a5fbba0c2c72bc 100644
+--- a/packages/app/src/session/timeline/interaction.ts
++++ b/packages/app/src/session/timeline/interaction.ts
+@@ -1,12 +1,13 @@
+ import type { SessionMessageUser } from "@opencode/client/promise"
+ import { createResizeObserver } from "@solid-primitives/resize-observer"
+ import { useLocation } from "@solidjs/router"
+-import { createEffect, on, onCleanup } from "solid-js"
++import { createEffect, createSignal, on, onCleanup } from "solid-js"
+ import { createStore } from "solid-js/store"
+ import { useLayout } from "@/shell/state/layout"
+ import type { SessionModel } from "../model"
+ import { useSessionHashScroll } from "../use-session-hash-scroll"
+ import { createTimelineModel } from "./model"
++import { readPosition, writePosition, type TimelinePosition } from "./position-memory"
+ 
+ export function createSessionTimelineInteraction(session: SessionModel) {
+   const layout = useLayout()
+@@ -47,6 +48,67 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+   let scrollStateTarget: HTMLDivElement | undefined
+   let fillFrame: number | undefined
+   let historyContinuationFrame: number | undefined
++  // ocelot: remember where the timeline was left (position-memory.ts) and reopen it there after a
++  // reload. Saved shortly after scrolling and when the page hides (iOS may discard it unannounced);
++  // following the newest content saves "at the bottom". Restored once per session per page load,
++  // unless a message link or a pending jump already decides where to go.
++  let positionApi: PositionApi | undefined
++  let restoringUntil = 0
++  let saveTimer: ReturnType<typeof setTimeout> | undefined
++  let restorePages = 0
++  // Bumped after each page this restore loads; `loadOlder` keeps its request guard until after the
++  // page is published, so re-running on the message change alone would find it still busy.
++  const [restoreTick, setRestoreTick] = createSignal(0)
++  const savePosition = () => {
++    clearTimeout(saveTimer)
++    const key = session.identity.sessionKey()
++    if (!session.identity.params.id || performance.now() < restoringUntil || !restored.has(key)) return
++    if (pinned()) return writePosition(key, undefined)
++    const position = positionApi?.capture()
++    if (position) writePosition(key, position)
++  }
++  const scheduleSavePosition = () => {
++    clearTimeout(saveTimer)
++    saveTimer = setTimeout(savePosition, 300)
++  }
++  const saveOnHide = () => {
++    if (document.visibilityState === "hidden") savePosition()
++  }
++  document.addEventListener("visibilitychange", saveOnHide)
++  window.addEventListener("pagehide", savePosition)
++  onCleanup(() => {
++    clearTimeout(saveTimer)
++    document.removeEventListener("visibilitychange", saveOnHide)
++    window.removeEventListener("pagehide", savePosition)
++  })
++  createEffect(() => {
++    const key = session.identity.sessionKey()
++    if (!session.identity.params.id || !timeline.ready() || restored.has(key)) return
++    const target = readPosition(key)
++    if (!target || location.hash || state.pendingMessage) {
++      restored.add(key)
++      return
++    }
++    restoreTick()
++    if (!timeline.messages().some((message) => message.id === target.turn)) {
++      // Load older pages until the turn is in, then restore; give up at the start of history.
++      if (!timeline.history.more() || restorePages >= 100) return void restored.add(key)
++      if (timeline.history.loading()) return
++      restorePages += 1
++      void timeline.history
++        .loadOlder()
++        .catch(() => undefined)
++        .finally(() => setRestoreTick((value) => value + 1))
++      return
++    }
++    restored.add(key)
++    restorePages = 0
++    restoringUntil = performance.now() + 1_500
++    requestAnimationFrame(() => {
++      setState("follow", { sessionKey: key, pinned: false })
++      if (!positionApi?.restore(target)) restoringUntil = 0
++    })
++  })
+   // ocelot: on iOS the virtualizer defers scroll corrections until scrolling stops, so a page of
+   // history prepended mid-scroll first shows older content, then snaps back. Hold the page until
+   // the timeline is at rest; then the correction is immediate and the visible row stays put.
+@@ -206,6 +268,7 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+   }
+   const onHistoryScroll = () => {
+     lastScroll = performance.now()
++    scheduleSavePosition()
+     if (
+       historyRequests.has(session.ownership.key()) ||
+       timeline.history.loading() ||
+@@ -347,6 +410,9 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+       setScrollToEnd: (scroll: () => void) => {
+         scrollToEnd = scroll
+       },
++      setPositionApi: (api: PositionApi) => {
++        positionApi = api
++      },
+       unpin,
+     },
+   }
+@@ -354,6 +420,14 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+ 
+ export type SessionTimelineInteraction = ReturnType<typeof createSessionTimelineInteraction>
+ 
++type PositionApi = {
++  capture: () => TimelinePosition | undefined
++  restore: (position: TimelinePosition) => boolean
++}
++
++/** Sessions whose saved position this page load has already applied (or had none). */
++const restored = new Set<string>()
++
+ /** Longer than the virtualizer's isScrollingResetDelay (150 ms), after which it applies corrections. */
+ const restDelay = 200
+ 
+diff --git a/packages/app/src/session/timeline/message-timeline.tsx b/packages/app/src/session/timeline/message-timeline.tsx
+index 25c5bc63d962d8e652ef7d627398464ac86c0168..de07be6fb39c98d0d4cca8c15d1c8e4d0f17ca97 100644
+--- a/packages/app/src/session/timeline/message-timeline.tsx
++++ b/packages/app/src/session/timeline/message-timeline.tsx
+@@ -95,6 +95,7 @@ type MessageTimelineProps = {
+   anchor: (id: string) => string
+   setRevealMessage?: (fn: (id: string, partID?: string) => void) => void
+   setScrollToEnd?: (fn: () => void) => void
++  setPositionApi?: Parameters<typeof createTimelineVirtualizer>[0]["setPositionApi"]
+   search?: JSX.Element
+ }
+ 
+@@ -224,6 +225,7 @@ function MessageTimelineView(
+     },
+     setRevealMessage: props.setRevealMessage,
+     setScrollToEnd: props.setScrollToEnd,
++    setPositionApi: props.setPositionApi,
+   })
+   const VirtualizedTimeline = virtualized.View
+   const [title, setTitle] = createStore({
+diff --git a/packages/app/src/session/timeline/position-memory.ts b/packages/app/src/session/timeline/position-memory.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ed10eee25dea1e9e6a98f45c5e2793a86b3553a6
+--- /dev/null
++++ b/packages/app/src/session/timeline/position-memory.ts
+@@ -0,0 +1,55 @@
++/**
++ * ocelot: where each session's timeline was left, so a reload (iOS discarding the page, a new
++ * tab) reopens it there, like Telegram. Kept per device in localStorage.
++ *
++ * A position is the row at the top of the viewport (its timeline key, with the turn's user
++ * message as a fallback when the row is gone, e.g. regrouped by another timeline preset) and how
++ * far the viewport's top sits below that row's top. A timeline that follows the newest content
++ * has no entry: it reopens at the bottom.
++ */
++export type TimelinePosition = {
++  readonly key: string
++  readonly turn: string
++  readonly offset: number
++}
++
++const storageKey = "ocelot.timeline.position.v1"
++const limit = 100
++
++type Stored = Record<string, TimelinePosition & { readonly at: number }>
++
++function load(): Stored {
++  try {
++    const value = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
++    return value && typeof value === "object" ? (value as Stored) : {}
++  } catch {
++    return {}
++  }
++}
++
++export function readPosition(sessionKey: string): TimelinePosition | undefined {
++  const entry = load()[sessionKey]
++  if (!entry || typeof entry.key !== "string" || typeof entry.turn !== "string" || !Number.isFinite(entry.offset))
++    return undefined
++  return { key: entry.key, turn: entry.turn, offset: entry.offset }
++}
++
++/** Saves a position, or forgets it (`undefined`: the timeline is at the bottom). */
++export function writePosition(sessionKey: string, position: TimelinePosition | undefined) {
++  try {
++    const stored = load()
++    if (position === undefined) {
++      if (!(sessionKey in stored)) return
++      delete stored[sessionKey]
++    } else {
++      stored[sessionKey] = { ...position, offset: Math.round(position.offset), at: Date.now() }
++      const keys = Object.keys(stored)
++      if (keys.length > limit)
++        keys
++          .sort((a, b) => stored[a]!.at - stored[b]!.at)
++          .slice(0, keys.length - limit)
++          .forEach((key) => delete stored[key])
++    }
++    localStorage.setItem(storageKey, JSON.stringify(stored))
++  } catch {}
++}
+diff --git a/packages/app/src/session/timeline/virtualizer.tsx b/packages/app/src/session/timeline/virtualizer.tsx
+index 5675de7c22fc1625b9a8bd22f0189bb3b7540373..7574b5b67297ab718b42b183d8b6890a6fd9d244 100644
+--- a/packages/app/src/session/timeline/virtualizer.tsx
++++ b/packages/app/src/session/timeline/virtualizer.tsx
+@@ -27,6 +27,7 @@ import { createMediaQuery } from "@solid-primitives/media"
+ import type { createTimelineProjection } from "./projection"
+ import { observeElementOffsetReconnectAware } from "./observe-element-offset"
+ import { filterVirtualIndexes } from "./virtual-items"
++import type { TimelinePosition } from "./position-memory"
+ 
+ const fallbackItemSize = 60
+ const pendingMarkdown = '[data-component="markdown"]:not([data-markdown-ready])'
+@@ -73,6 +74,11 @@ type Input = {
+   ) => boolean
+   setRevealMessage?: (fn: (id: string, partID?: string) => void) => void
+   setScrollToEnd?: (fn: () => void) => void
++  /** ocelot: read and restore the viewport position (position-memory.ts). */
++  setPositionApi?: (api: {
++    capture: () => TimelinePosition | undefined
++    restore: (position: TimelinePosition) => boolean
++  }) => void
+ }
+ 
+ type ViewProps = {
+@@ -379,8 +385,57 @@ export function createTimelineVirtualizer(input: Input) {
+       input.onPin()
+       virtualizer.scrollToEnd()
+     })
++    input.setPositionApi?.({ capture: capturePosition, restore: restorePosition })
+   })
+ 
++  // ocelot: the row at the top of the viewport and how far the viewport's top sits below it.
++  function capturePosition(): TimelinePosition | undefined {
++    const root = listRoot()
++    if (!active() || !root || !virtualContent) return undefined
++    const line = root.getBoundingClientRect().top + topOffset()
++    let best: { element: HTMLElement; top: number } | undefined
++    for (const element of virtualContent.querySelectorAll<HTMLElement>("[data-timeline-key]")) {
++      const rect = element.getBoundingClientRect()
++      if (rect.height === 0 || rect.bottom <= line + 1) continue
++      if (!best || rect.top < best.top) best = { element, top: rect.top }
++    }
++    const key = best?.element.dataset.timelineKey
++    const row = key ? rowByKey().get(key) : undefined
++    if (!best || !key || !row) return undefined
++    return { key, turn: row.userMessageID, offset: line - best.top }
++  }
++
++  // Scrolls the saved row (or its turn's first row) to the top, then corrects against real
++  // layout for a few frames while rows around it mount and measure.
++  function restorePosition(position: TimelinePosition) {
++    const exact = rows().findIndex((row) => TimelineRow.key(row) === position.key)
++    const index = exact >= 0 ? exact : input.projection.messageRowIndex().get(position.turn)
++    if (index === undefined || !rows()[index]) return false
++    const key = TimelineRow.key(rows()[index]!)
++    const offset = exact >= 0 ? position.offset : 0
++    prepareNavigation()
++    virtualizer.scrollToIndex(index, { align: "start" })
++    let frames = 0
++    let stable = 0
++    const refine = () => {
++      const root = listRoot()
++      if (!active() || !root) return
++      const element = virtualContent?.querySelector<HTMLElement>(`[data-timeline-key="${CSS.escape(key)}"]`)
++      if (!element) virtualizer.scrollToIndex(index, { align: "start" })
++      else {
++        const line = root.getBoundingClientRect().top + topOffset()
++        const delta = element.getBoundingClientRect().top - (line - offset)
++        if (Math.abs(delta) > 1) {
++          root.scrollTop += delta
++          stable = 0
++        } else stable++
++      }
++      if (stable < 3 && ++frames < 60) requestAnimationFrame(refine)
++    }
++    requestAnimationFrame(refine)
++    return true
++  }
++
+   let coldPending = coldBottomMount
+   let settleQueued = false
+   let contentObserver: MutationObserver | undefined

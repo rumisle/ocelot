@@ -153,8 +153,11 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          switch and by an interrupted run with a tool still running. Fixed in web/scrollback-resync:
          resync refetches down to the oldest loaded message (exact depth). Repro after: stays on turn 8,
          with or without new messages while away.
-   - [ ] If iOS evicts the page (full reload), it opens at the bottom: the position isn't saved.
-         Possible: remember the anchor message per session (sessionStorage), load down to it on open.
+   - [x] Reopen where it was left after a reload (web/timeline-position, Telegram-like, option B): the
+         top row's key + turn + offset per session in localStorage (saved 300 ms after scrolling and on
+         hide); following the bottom saves nothing. Restore loads older pages down to the turn (≤ 100),
+         then corrects against layout. No new-message hint (the existing jump-to-bottom button stays).
+         Checked desktop + phone: turn 54 → 54, turn 10 → 10, bottom → bottom.
    - [x] Fixed (web/ios-history-prepend): cause is @tanstack/virtual-core deferring scroll corrections
          on iOS while scrolling (`_iosDeferredAdjustment`), so a prepended page showed older content, then
          snapped back at rest. On iOS the loaded page is now published once the timeline is at rest (no
