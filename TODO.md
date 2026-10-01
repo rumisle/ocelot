@@ -146,13 +146,18 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 ## 5. Backlog from 2026-09-27 (researched, not started)
 
 1. **Scrollback.**
-   - [ ] Returning to the app (iOS app switch, any reconnect) loses your place. Likely cause:
-         on reconnect `session-resolution.ts` re-runs `message.sync`, which replaces the
-         transcript with only the latest 20 messages (`reconcile`), dropping every older page
-         you had loaded. Fix: on resync, merge the fetched page into what is loaded (or refetch
-         down to the oldest loaded message) instead of replacing it; keep the scroll anchor.
-   - [ ] Loading older pages jumps back and forth (flicker). Needs a recording/repro; check the
-         virtualizer's scroll anchoring when rows are prepended (`timeline/virtualizer.tsx`).
+   - [x] Returning to the app (iOS app switch, any reconnect) loses your place. Confirmed: any
+         reconnect (foreground after the stream went quiet 20 s, `online`, pagehide/pageshow, a server
+         restart) invalidates everything and `message.sync` kept only the newest page, so the view
+         jumped (repro: scrolled back to turn 8 of 60, reconnect → turn 52). Also hit by a branch
+         switch and by an interrupted run with a tool still running. Fixed in web/scrollback-resync:
+         resync refetches down to the oldest loaded message (exact depth). Repro after: stays on turn 8,
+         with or without new messages while away.
+   - [ ] If iOS evicts the page (full reload), it opens at the bottom: the position isn't saved.
+         Possible: remember the anchor message per session (sessionStorage), load down to it on open.
+   - [ ] Loading older pages jumps back and forth (flicker). Not reproducible in Chromium (wheel and
+         small steps, no backward jumps); likely iOS Safari (no overflow-anchor, momentum scrolling
+         while rows are prepended). Needs a screen recording from the phone.
    - [ ] Orientation while scrolling back: e.g. a sticky "which turn am I in" header or
          scrubber with turn positions.
 2. **Edit/branches polish.**

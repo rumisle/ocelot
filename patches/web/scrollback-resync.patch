@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 2 Oct 2026 00:21:49 +0800
+Subject: client/data: a resync keeps the history the user scrolled back to
+
+Reconnecting (returning to the app, a network change, a server restart) re-ran
+message.sync, which kept only the newest page: every older page the user had
+loaded was dropped and the view jumped to whatever now sat at that scroll
+offset. The resync now refetches down to the oldest loaded message, asking for
+exactly the missing depth, so the loaded range and the scroll position hold.
+
+Ocelot-Patch: web/scrollback-resync
+
+diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
+index f8cb4254dda235d58a628110ff98b99aef5127f2..db79cc4f82e701ae8d07472ae6c54ef9d3d18870 100644
+--- a/packages/client/src/solid/data.ts
++++ b/packages/client/src/solid/data.ts
+@@ -1697,7 +1697,26 @@ export function createData(config: CreateDataInput) {
+               limit: config.initialMessageLimit?.() ?? messagePageLimit,
+               order: "desc",
+             })
+-            const fetched = response.data.toReversed()
++            // ocelot: a resync (reconnect, returning to the app, a branch switch) refetches down to
++            // the oldest message already loaded instead of keeping only the newest page, so older
++            // pages the user scrolled back to stay loaded and the scroll position holds. Stops once
++            // that message is reached, or a page past the loaded depth if it no longer exists.
++            const loaded = store.session.message[sessionID] ?? []
++            const oldest = loaded.find((item) => !outbox.has(item.id))?.id
++            const known = new Set(loaded.map((item) => item.id))
++            const pages = [...response.data]
++            let cursor = response.cursor.next ?? undefined
++            if (oldest !== undefined && loaded.length > pages.length)
++              while (cursor && !pages.some((item) => item.id === oldest) && pages.length < loaded.length + 200) {
++                // Ask for exactly the depth still missing (new messages push it down) so nothing
++                // older than what was loaded lands above the user's scroll position.
++                const added = pages.filter((item) => !known.has(item.id)).length
++                const limit = Math.min(200, Math.max(1, loaded.length + added - pages.length))
++                const page = await api().message.list({ sessionID, limit, cursor })
++                pages.push(...page.data)
++                cursor = page.cursor.next ?? undefined
++              }
++            const fetched = pages.toReversed()
+             // Same protection as the pending sync: a re-fetch racing an
+             // admission must not wipe its local transcript row.
+             const ids = new Set(fetched.map((item) => item.id))
+@@ -1713,7 +1732,7 @@ export function createData(config: CreateDataInput) {
+             batch(() => {
+               messageIndex.set(sessionID, new Map(messages.map((message, index) => [message.id, index])))
+               setStore("session", "message", sessionID, reconcile(messages))
+-              setStore("session", "messageCursor", sessionID, response.cursor.next ?? undefined)
++              setStore("session", "messageCursor", sessionID, cursor)
+             })
+           })
+         },
+diff --git a/packages/client/test/solid-data.test.ts b/packages/client/test/solid-data.test.ts
+index 07b8dfaef15140866679f664d96c362ecda5fe30..aee5965a5614fcbb881ecfb023cc1c57255a48ea 100644
+--- a/packages/client/test/solid-data.test.ts
++++ b/packages/client/test/solid-data.test.ts
+@@ -1124,3 +1124,63 @@ async function wait(check: () => boolean) {
+     await Bun.sleep(10)
+   }
+ }
++
++// ocelot: a resync keeps the history the user scrolled back to.
++test("a resync refetches down to the oldest loaded message instead of dropping older pages", async () => {
++  // msg_01 (oldest) … msg_30 (newest); pages of the requested size, newest first.
++  let messages = Array.from({ length: 30 }, (_, index) => ({
++    id: `msg_${String(index + 1).padStart(2, "0")}`,
++    type: "user",
++    text: `Message ${index + 1}`,
++    time: { created: index + 1 },
++  }))
++  const requests: Record<string, string>[] = []
++  const api = OpenCode.make({
++    baseUrl: "http://opencode.local",
++    fetch: async (input, init) => {
++      const url = new URL((input instanceof Request ? input : new Request(input, init)).url)
++      requests.push(Object.fromEntries(url.searchParams))
++      const limit = Number(url.searchParams.get("limit"))
++      const start = Number(url.searchParams.get("cursor") ?? "0")
++      const newestFirst = messages.toReversed()
++      const data = newestFirst.slice(start, start + limit)
++      const next = start + limit < newestFirst.length ? String(start + limit) : undefined
++      return Response.json({ data, cursor: next ? { next } : {} })
++    },
++  })
++  const setup = createRoot((dispose) => ({
++    data: createData({
++      api: () => api,
++      directory: "/project",
++      initialMessageLimit: () => 5,
++      event: { on: () => () => {}, listen: () => () => {} },
++    }),
++    dispose,
++  }))
++  const ids = () => setup.data.session.message.list("ses_refresh").map((message) => message.id)
++  try {
++    await setup.data.session.message.sync("ses_refresh")
++    await setup.data.session.message.loadMore("ses_refresh")
++    expect(ids()).toHaveLength(25)
++    expect(ids()[0]).toBe("msg_06")
++
++    // Two new messages while away, then the reconnect resync.
++    messages = [...messages, ...[31, 32].map((index) => ({ ...messages[0]!, id: `msg_${index}`, text: `Message ${index}` }))]
++    requests.length = 0
++    setup.data.session.message.invalidate("ses_refresh")
++    await setup.data.session.message.sync("ses_refresh")
++    expect(ids()[0]).toBe("msg_06")
++    expect(ids().at(-1)).toBe("msg_32")
++    expect(ids()).toHaveLength(27)
++    expect(requests).toEqual([
++      { limit: "5", order: "desc" },
++      { cursor: "5", limit: "22" },
++    ])
++    // Paging further back continues from where the resync stopped.
++    requests.length = 0
++    await setup.data.session.message.loadMore("ses_refresh")
++    expect(ids()[0]).toBe("msg_01")
++  } finally {
++    setup.dispose()
++  }
++})
