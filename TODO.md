@@ -155,9 +155,14 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          with or without new messages while away.
    - [ ] If iOS evicts the page (full reload), it opens at the bottom: the position isn't saved.
          Possible: remember the anchor message per session (sessionStorage), load down to it on open.
-   - [ ] Loading older pages jumps back and forth (flicker). Not reproducible in Chromium (wheel and
-         small steps, no backward jumps); likely iOS Safari (no overflow-anchor, momentum scrolling
-         while rows are prepended). Needs a screen recording from the phone.
+   - [ ] Loading older pages jumps back and forth (flicker). Reproduced in WebKit (podman image
+         mcr.microsoft.com/playwright/python:v1.63.0-noble, test/flicker-webkit.py samples the top row
+         every frame): near the top, a prepended batch leaves scrollTop at 0, the view shows turn 1 for
+         ~200 ms, then the app's compensation lands ~7 turns too low (15 → 22), every run. Chromium only
+         steps back one turn per loaded page. Real iOS takes the touch path (deferred scrollAdjustment),
+         which Linux WebKit can't emulate (no Touch constructor); confirm with a phone recording.
+         Note: programmatic scrollBy without a wheel/touch never unpins, so it snaps to the bottom;
+         tests must send the intent first.
    - [ ] Orientation while scrolling back: e.g. a sticky "which turn am I in" header or
          scrubber with turn positions.
 2. **Edit/branches polish.**
