@@ -260,8 +260,9 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       "ClientError: UnsupportedContentType", and the defect is logged at INFO. Return a JSON error body
       for defects and unknown routes, log defects at ERROR, and have the client include status + path.
       (Hit 2026-10-01 on an NFS home that filled up and corrupted the database.)
-13. [ ] **(HIGH PRIORITY) `job` helper instead of the tmux recipe** (agent-config): `job start NAME -- cmd`, `job wait ID`
-      (≤ 90 s, re-callable; done = an `exit` file written by rename; process gone without it = died),
-      `job log`, `job kill` (process group). Then shrink the AGENTS.md section, then item 4 step 1.
+13. [x] **`bgjob` instead of the tmux recipe** (agent-config 157bb3f): `bgjob start/wait/log/peek/send/ls/kill`
+      on `tmux -L agent`, job ID = session name; `wait` prints one status line (running / exited N / killed /
+      died), output via `log`. AGENTS.md section rewritten; test/bgjob-test.sh (34 checks, 16 parallel runs clean).
+      Next: item 4 step 1.
 11. [x] (patch core/watch-symlinked-dir: watch the real directory, report paths under the link) Config watching fails: `~/.config/opencode` is a symlink (to agent-config) and the
       watcher errors "inotify_add_watch ... Not a directory", so config edits may not reload.
