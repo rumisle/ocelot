@@ -30,3 +30,4 @@ web/tool-elapsed.patch
 web/scrollback-resync.patch
 web/ios-history-prepend.patch
 web/timeline-position.patch
+web/working-timer-resync.patch

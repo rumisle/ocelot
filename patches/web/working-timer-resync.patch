@@ -1,0 +1,158 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 2 Oct 2026 17:11:58 +0800
+Subject: server: /api/session/active reports when each run started; the
+ working timer uses it
+
+A page opened or reloaded mid-run used to start the composer's working timer at
+the last user message, so a run with a steer or a delivered follow-up looked
+like it restarted. The execution service records when each execution started,
+/api/session/active returns it as time.started (optional, additive), and the
+client data layer seeds runStarted from it on (re)connect; a start event seen
+during hydration still wins.
+
+Ocelot-Patch: web/working-timer-resync
+
+diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
+index ce8435a911969e2a57e6cc423a0deeab00a6d485..d6c58f7034103aa1e8694a60612736164ad5d946 100644
+--- a/packages/client/src/effect/api/api.ts
++++ b/packages/client/src/effect/api/api.ts
+@@ -221,7 +221,9 @@ export type SessionExportInput = { readonly sessionID: Session.ID; readonly sani
+ export type SessionExportOutput = { readonly info: Session.Info; readonly messages: ReadonlyArray<SessionMessage.Info> }
+ export type SessionExportOperation<E = never> = (input: SessionExportInput) => Effect.Effect<SessionExportOutput, E>
+ 
+-export type SessionActiveOutput = { readonly [x: Session.ID]: { readonly type: "running" } }
++export type SessionActiveOutput = {
++  readonly [x: Session.ID]: { readonly type: "running"; readonly time?: { readonly started: number } | undefined }
++}
+ export type SessionActiveOperation<E = never> = () => Effect.Effect<SessionActiveOutput, E>
+ 
+ export type SessionGetInput = { readonly sessionID: Session.ID }
+diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
+index 38599b1fb93d588934a3218b2bb7d936f63477d6..dcb84cb5d12ded7be9cb910954a13b5467249968 100644
+--- a/packages/client/src/promise/generated/types.ts
++++ b/packages/client/src/promise/generated/types.ts
+@@ -173,7 +173,7 @@ export type SessionMessageNotice = {
+   text: string
+ }
+ 
+-export type SessionActive = { type: "running" }
++export type SessionActive = { type: "running"; time?: { started: number } | undefined }
+ 
+ export type SessionInboxDelivery = "steer" | "queue"
+ 
+diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
+index 08dfc42e438e8797cf634febf2b3825c2344a304..03243684a410721debed340be0978ba72f987e82 100644
+--- a/packages/client/src/solid/data.ts
++++ b/packages/client/src/solid/data.ts
+@@ -612,6 +612,11 @@ export function createData(config: CreateDataInput) {
+               if (activeUpdates !== updates) return
+               // Lifecycle events received during hydration supersede the snapshot.
+               const snapshot = new Map<string, DataSessionStatus>(Object.keys(active).map((id) => [id, "running"]))
++              // ocelot: a run already going when the page loaded (or that started while disconnected)
++              // gets its start time from the server; a start event seen during hydration wins.
++              for (const [id, info] of Object.entries(active)) {
++                if (!updates.has(id) && info.time?.started !== undefined) runStarted.set(id, info.time.started)
++              }
+               updates.forEach((status, id) => {
+                 if (status === undefined) return snapshot.delete(id)
+                 snapshot.set(id, status)
+diff --git a/packages/core/src/session.ts b/packages/core/src/session.ts
+index 09e8e24a52dfa86359bb03cef5d62a1dbe250f7f..b19506d13504264ea3d4fd2deb53bb0db90ef0fd 100644
+--- a/packages/core/src/session.ts
++++ b/packages/core/src/session.ts
+@@ -214,6 +214,8 @@ export interface Interface {
+   ) => Effect.Effect<SessionInbox.Compaction, NotFoundError | CompactionConflictError>
+   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
++  /** ocelot: when each active execution started (epoch ms). */
++  readonly activeSince?: Effect.Effect<ReadonlyMap<SessionSchema.ID, number>>
+   readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
+   readonly interrupt: (sessionID: SessionSchema.ID, options?: { readonly resume?: boolean }) => Effect.Effect<boolean>
+@@ -441,6 +443,7 @@ const layer = Layer.effect(
+       compact: (input) => sessions.forSession(input.sessionID).compact(input),
+       wait: (sessionID) => sessions.forSession(sessionID).wait(),
+       active: execution.active,
++      activeSince: execution.activeSince,
+       background: Effect.fn("Session.background")(function* (sessionID) {
+         yield* result.get(sessionID)
+         const backgrounded = yield* jobs.backgroundAll({ sessionID })
+diff --git a/packages/core/src/session/execution.ts b/packages/core/src/session/execution.ts
+index eeed241ae14e30645d4e0904c69d3ebfe919ef38..7d87e8130c7ec5404f84b8b0907860b73bf2878e 100644
+--- a/packages/core/src/session/execution.ts
++++ b/packages/core/src/session/execution.ts
+@@ -17,6 +17,8 @@ import { SessionInbox } from "./inbox.js"
+ export interface Interface {
+   /** Snapshots active execution owned by this process. */
+   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
++  /** ocelot: when each active execution started (epoch ms), so a client that missed the start can time it. */
++  readonly activeSince?: Effect.Effect<ReadonlyMap<SessionSchema.ID, number>>
+   /** Checks process-local ownership, including interruption cleanup and terminal settlement. */
+   readonly isActive: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
+   /** Starts execution while idle or joins the active execution. */
+@@ -108,11 +110,14 @@ export const layer = Layer.effect(
+         Reloaded: (result) => drain(sessionID, result.force, result.continuation, promotable),
+       })
+     })
++    const since = new Map<SessionSchema.ID, number>()
+     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError, InterruptReason>({
+       started: (sessionID) =>
+         reportLifecycle(
+           sessionID,
+-          bus.publish(SessionEvent.Execution.Started, { sessionID }, claimOnCommit(sessionID)),
++          Effect.sync(() => since.set(sessionID, Date.now())).pipe(
++            Effect.andThen(bus.publish(SessionEvent.Execution.Started, { sessionID }, claimOnCommit(sessionID))),
++          ),
+         ),
+       drain: (sessionID, force, promotable) => drain(sessionID, force, undefined, promotable),
+       // One terminal observation per busy period, covering every coalesced drain.
+@@ -120,6 +125,7 @@ export const layer = Layer.effect(
+         reportLifecycle(
+           sessionID,
+           Effect.gen(function* () {
++            since.delete(sessionID)
+             const outcome = terminal(exit, reason)
+             if (outcome.type === "succeeded") {
+               yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID }, releaseOnCommit(sessionID))
+@@ -149,6 +155,7 @@ export const layer = Layer.effect(
+ 
+     return Service.of({
+       active: coordinator.active,
++      activeSince: Effect.sync(() => new Map(since)),
+       isActive: coordinator.isActive,
+       interrupt: (sessionID, options) =>
+         Effect.gen(function* () {
+diff --git a/packages/protocol/src/groups/session.ts b/packages/protocol/src/groups/session.ts
+index a5d112d0fcab4ea98f8cd5bed68ece0de3d37fc2..56e9d752b37d24e94cfde7e87584d738541c8cdf 100644
+--- a/packages/protocol/src/groups/session.ts
++++ b/packages/protocol/src/groups/session.ts
+@@ -115,6 +115,8 @@ export type SessionsCursor = typeof SessionsCursor.Type
+ 
+ const SessionActive = Schema.Struct({
+   type: Schema.Literal("running"),
++  // ocelot: when the current execution started (epoch ms), for clients that missed its start event.
++  time: Schema.optional(Schema.Struct({ started: Schema.Number })),
+ }).annotate({ identifier: "SessionActive" })
+ 
+ const PublicSessionInfo = Schema.Struct({
+diff --git a/packages/server/src/handlers/session.ts b/packages/server/src/handlers/session.ts
+index a929ac44709290f9fa2c0119992eb1407f2cf754..5eeb85fda8670be73d3c2f68a6ce4853e675df83 100644
+--- a/packages/server/src/handlers/session.ts
++++ b/packages/server/src/handlers/session.ts
+@@ -181,8 +181,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
+         "session.active",
+         Effect.fn(function* () {
+           const active = yield* session.active
++          const since = session.activeSince ? yield* session.activeSince : undefined
+           return {
+-            data: Object.fromEntries(Array.from(active, (sessionID) => [sessionID, { type: "running" as const }])),
++            data: Object.fromEntries(
++              Array.from(active, (sessionID) => {
++                const started = since?.get(sessionID)
++                return [sessionID, { type: "running" as const, ...(started === undefined ? {} : { time: { started } }) }]
++              }),
++            ),
+           }
+         }),
+       )
