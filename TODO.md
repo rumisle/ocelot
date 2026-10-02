@@ -124,7 +124,8 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       reports, tap opens the session). Nothing is pushed while any web app is in use (visible,
       focused, input in the last 3 min). Title = session title; body = the reply / "Needs
       permission · …" / the question / "Failed · …". Also notifies in the browser for permissions
-      and questions (upstream had the switch but no code).
+      and questions (upstream had the switch but no code). The TUI reports presence too
+      (tui/push-presence: terminal focus + a key in the last 3 min), unreleased until the next bump.
 - [x] Push confirmed on the iPhone (home screen app, 2026-10-03): delivery through
       web.push.apple.com, lock-screen look, and a tap with the app closed opens the session.
 

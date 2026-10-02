@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 3 Oct 2026 02:14:19 +0800
+Subject: tui: report whether the TUI is in use to Web Push
+
+Like the web app, the TUI tells the server (POST /api/ocelot/push/presence)
+whether it is in use: the terminal is not known to be unfocused (focus
+reporting) and a key or paste came in the last 3 minutes. While it is,
+nothing is pushed to a phone. Quitting clears it at once; a non-ocelot
+server answers 404 and the TUI stops reporting.
+
+Ocelot-Patch: tui/push-presence
+
+diff --git a/packages/tui/src/app.tsx b/packages/tui/src/app.tsx
+index efb195b8663487337c8a271839a531642785f87d..022e0f2f49254cdc609f71070fc82dbd0548f2df 100644
+--- a/packages/tui/src/app.tsx
++++ b/packages/tui/src/app.tsx
+@@ -98,6 +98,7 @@ import { DialogVariant } from "./component/dialog-variant"
+ import { destroyRenderer } from "./util/renderer"
+ import { cliErrorMessage, errorFormat } from "./util/error"
+ import { AttentionProvider } from "./context/attention"
++import { PushPresence } from "./context/push-presence"
+ import { StorageProvider, useStorage } from "./context/storage"
+ import { SessionTerminalsProvider } from "./context/session-terminals"
+ import { PanelProvider, usePanel } from "./context/panel"
+@@ -217,10 +218,13 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
+   const pluginDirectories = yield* Effect.promise(() => localPluginDirectories(process.cwd(), global.config))
+   const handoff = input.terminalHandoff ? yield* Effect.promise(input.terminalHandoff) : undefined
+   const managed = input.server.service
++  // ocelot: the server's current address and credentials, for PushPresence.
++  let current = input.server.endpoint
+   const service = managed
+     ? {
+         reconnect: async (signal: AbortSignal) => {
+           const endpoint = await managed.reconnect(signal)
++          current = endpoint
+           const next = { baseUrl: endpoint.url, headers: Service.headers(endpoint) }
+           return { api: OpenCode.make(next), url: endpoint.url }
+         },
+@@ -395,6 +399,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
+                                                                     <PromptRefProvider>
+                                                                       <EditorContextProvider>
+                                                                         <AttentionProvider>
++                                                                          <PushPresence endpoint={() => current} />
+                                                                           <UpdateNotificationProvider
+                                                                             updater={input.updater}
+                                                                           >
+diff --git a/packages/tui/src/context/push-presence.tsx b/packages/tui/src/context/push-presence.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..4247c73dd540ab5c73074dd717583bb1b27e62c9
+--- /dev/null
++++ b/packages/tui/src/context/push-presence.tsx
+@@ -0,0 +1,63 @@
++import { Service, type Endpoint } from "@opencode/client/effect/service"
++import { useKeyboard, usePaste, useRenderer } from "@opentui/solid"
++import { randomUUID } from "node:crypto"
++import { onCleanup } from "solid-js"
++
++// ocelot: tells the server's Web Push (packages/cli/src/services/web-push.ts) whether this TUI is in
++// use, like the web app does: nothing is pushed to a phone while you are typing here. In use means
++// the terminal is not known to be unfocused and a key or paste came in the last IDLE.
++
++const IDLE = 3 * 60_000
++const HEARTBEAT = 20_000
++
++export function PushPresence(props: { endpoint: () => Endpoint }) {
++  const renderer = useRenderer()
++  const client = randomUUID()
++  const state = { input: Date.now(), blurred: false, sent: undefined as boolean | undefined, stopped: false }
++
++  const send = (active: boolean) => {
++    if (state.stopped || (state.sent === false && !active)) return
++    state.sent = active
++    const endpoint = props.endpoint()
++    void fetch(new URL("api/ocelot/push/presence", endpoint.url.endsWith("/") ? endpoint.url : endpoint.url + "/"), {
++      method: "POST",
++      headers: { ...Service.headers(endpoint), "content-type": "application/json" },
++      body: JSON.stringify({ client, active }),
++      signal: AbortSignal.timeout(5_000),
++    })
++      .then((response) => {
++        // Not an ocelot server: nothing to report to.
++        if (response.status === 404) state.stopped = true
++      })
++      .catch(() => undefined)
++  }
++  const update = () => send(!state.blurred && Date.now() - state.input < IDLE)
++  const input = () => {
++    const idle = Date.now() - state.input >= IDLE
++    state.input = Date.now()
++    if (idle) update()
++  }
++  const focus = () => {
++    state.blurred = false
++    update()
++  }
++  const blur = () => {
++    state.blurred = true
++    update()
++  }
++
++  useKeyboard(input)
++  usePaste(input)
++  renderer.on("focus", focus)
++  renderer.on("blur", blur)
++  const timer = setInterval(update, HEARTBEAT)
++  update()
++  onCleanup(() => {
++    clearInterval(timer)
++    renderer.off("focus", focus)
++    renderer.off("blur", blur)
++    send(false)
++    state.stopped = true
++  })
++  return null
++}
+diff --git a/packages/tui/test/fixture/tui-client.ts b/packages/tui/test/fixture/tui-client.ts
+index 50e175e3d2b9b2670f89f53b59a610a92e138f3c..7f7cd03e61c2e56d3c5be42b5453789a6e1d1480 100644
+--- a/packages/tui/test/fixture/tui-client.ts
++++ b/packages/tui/test/fixture/tui-client.ts
+@@ -164,6 +164,9 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof
+     if (url.pathname === "/session") return json([])
+     if (url.pathname === "/vcs") return json({ branch: "main" })
+     if (url.pathname === "/api/experimental/migration/v1") return json({ status: "completed" })
++    // ocelot: the TUI reports whether it is in use (context/push-presence.tsx).
++    if (request.method === "POST" && url.pathname === "/api/ocelot/push/presence")
++      return new Response(null, { status: 204 })
+     throw new Error(`unexpected request: ${url.pathname}`)
+   }
+   fetch.preconnect = () => {}
