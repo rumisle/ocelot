@@ -125,8 +125,8 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       focused, input in the last 3 min). Title = session title; body = the reply / "Needs
       permission · …" / the question / "Failed · …". Also notifies in the browser for permissions
       and questions (upstream had the switch but no code).
-- [ ] Push: confirm on the iPhone (home screen app): tap with the app closed opens the session
-      (`clients.openWindow`; automation can't fake a real tap), delivery, one per session.
+- [x] Push confirmed on the iPhone (home screen app, 2026-10-03): delivery through
+      web.push.apple.com, lock-screen look, and a tap with the app closed opens the session.
 
 ### Plugin UI in the web app
 - [ ] General way for plugins to add UI to the web app (upstream only has TUI plugin slots).
