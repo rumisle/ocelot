@@ -1,0 +1,494 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 3 Oct 2026 02:45:24 +0800
+Subject: app: drive the web app from the keyboard
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Web defaults where the browser keeps the desktop ones (custom keybinds
+still win; the desktop app is unchanged): alt+T new session, alt+W close
+tab, alt+shift+T reopen, alt+[ / alt+] previous / next tab, alt+I focus
+input. With alt, digits and punctuation match the physical key, so the
+Option key works on a Mac.
+
+New everywhere: alt+1..9 go to a tab; alt+↑ / alt+↓ step through
+messages and replies (each user message and the start of each reply;
+past the last one follows the bottom again); PageUp / PageDown scroll
+the transcript even while typing (other scrollers keep their keys);
+alt+G stops the session from anywhere; alt+E edits the last message;
+alt+C copies the last reply; alt+Y / alt+A / alt+N answer a permission
+request; alt+/ opens Settings > Shortcuts. In the composer a single
+Escape no longer stops a run: it asks for a second one within 1.5 s.
+
+Ocelot-Patch: web/keyboard
+
+diff --git a/packages/app/src/composer/editor/interaction.ts b/packages/app/src/composer/editor/interaction.ts
+index 051f6faa3297524ffdecfd9ace254b5de51bcecf..251f947f9e74fe18f5454ff2adbf7d9273f5309e 100644
+--- a/packages/app/src/composer/editor/interaction.ts
++++ b/packages/app/src/composer/editor/interaction.ts
+@@ -46,6 +46,8 @@ export type ComposerEditorView = {
+     queue?: ComposerQueue
+     onSubmit: (options?: { alternate?: boolean }) => void
+     onStop: () => void
++    /** ocelot: a first Escape while working; set to require a second one to stop. */
++    onStopArmed?: () => void
+   }
+   shell?: {
+     onOpen: () => void
+@@ -53,6 +55,8 @@ export type ComposerEditorView = {
+   }
+ }
+ 
++const ESCAPE_AGAIN = 1500
++
+ export function createComposerEditorState(mode: "normal" | "shell" = "normal") {
+   return createStore({ ...createComposerInteractionState(), mode })
+ }
+@@ -192,6 +196,7 @@ export function createComposerEditor(input: {
+     return result.handled
+   }
+ 
++  let escapedAt = 0
+   const onKeyDown = (event: KeyboardEvent) => {
+     if (
+       state.mode === "normal" &&
+@@ -231,6 +236,13 @@ export function createComposerEditor(input: {
+         event.key === "Escape")
+     if (stop) {
+       event.preventDefault()
++      // ocelot: Escape stops only when pressed twice within ESCAPE_AGAIN (a stray Escape cost a run).
++      if (event.key === "Escape" && input.view.submit.onStopArmed && Date.now() - escapedAt > ESCAPE_AGAIN) {
++        escapedAt = Date.now()
++        input.view.submit.onStopArmed()
++        return true
++      }
++      escapedAt = 0
+       input.view.submit.onStop()
+       return true
+     }
+diff --git a/packages/app/src/composer/model.ts b/packages/app/src/composer/model.ts
+index 42817390bdf710f7e6a82f31dbd90d04ec9b4a70..04682ee929f8e58db999031ea06e02f9388fb896 100644
+--- a/packages/app/src/composer/model.ts
++++ b/packages/app/src/composer/model.ts
+@@ -387,6 +387,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
+           void submission.submit(new Event("submit"), submitOptions)
+         },
+         onStop: () => void submission.stop(),
++        onStopArmed: () => showToast({ title: language.t("prompt.stop.again") }),
+       },
+     },
+   })
+diff --git a/packages/app/src/runtime/i18n/en.ts b/packages/app/src/runtime/i18n/en.ts
+index 1bf41416e20d449df9678b64d08a563402f1e459..568ffdc948ef243b6ef408ed635f46c67e9dc97f 100644
+--- a/packages/app/src/runtime/i18n/en.ts
++++ b/packages/app/src/runtime/i18n/en.ts
+@@ -47,6 +47,14 @@ export const dict = {
+   "command.message.previous.description": "Go to the previous user message",
+   "command.message.next": "Next message",
+   "command.message.next.description": "Go to the next user message",
++  "command.message.editLast": "Edit last message",
++  "command.message.copyLast": "Copy last reply",
++  "command.message.copyLast.failed": "Could not copy the reply",
++  "command.session.interrupt": "Stop the session",
++  "command.timeline.pageUp": "Scroll up a page",
++  "command.timeline.pageDown": "Scroll down a page",
++  "command.settings.shortcuts": "Show keyboard shortcuts",
++  "prompt.stop.again": "Press Esc again to stop",
+   "command.model.choose": "Choose model",
+   "command.model.choose.description": "Select a different model",
+   "command.mcp.toggle": "Toggle MCPs",
+diff --git a/packages/app/src/session/commands/use-session-commands.tsx b/packages/app/src/session/commands/use-session-commands.tsx
+index 8bb7bb609c66ef2841e0ec89491e0eaa73e67c77..ab71b11c99e198000423864732d136d45592dc4c 100644
+--- a/packages/app/src/session/commands/use-session-commands.tsx
++++ b/packages/app/src/session/commands/use-session-commands.tsx
+@@ -18,8 +18,8 @@ import type { Region } from "@/runtime/extension/panels"
+ 
+ type SessionCommandSource = {
+   identity: SessionModel["identity"]
+-  data: Pick<SessionModel["data"], "info" | "revertMessageID">
+-  history: Pick<SessionModel["history"], "visibleUserMessages">
++  data: Pick<SessionModel["data"], "info" | "revertMessageID" | "working">
++  history: Pick<SessionModel["history"], "visibleUserMessages" | "messages">
+   layout: SessionModel["layout"]
+   ownership: SessionModel["ownership"]
+ }
+@@ -32,8 +32,11 @@ export type SessionCommandContext = {
+     move: () => Promise<void>
+   }
+   navigateMessageByOffset: (offset: number) => void
+-  revert: Pick<SessionRevert, "undo" | "redo">
++  revert: Pick<SessionRevert, "undo" | "redo" | "to">
+   focusInput: () => void
++  /** ocelot: scroll the timeline by a page (web/keyboard), unless the key belongs to another scroller. */
++  page: (direction: -1 | 1) => void
++  pageable: (target: EventTarget | null) => boolean
+ }
+ 
+ const withCategory = (category: string) => {
+@@ -405,6 +408,77 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
+     }),
+   ]
+ 
++  // ocelot: drive the session from the keyboard (web/keyboard).
++  const lastReply = () => {
++    const last = actions.session.history.visibleUserMessages().at(-1)
++    if (!last) return ""
++    return actions.session.history
++      .messages()
++      .filter((message) => message.id > last.id && message.type === "assistant")
++      .flatMap((message) => (message.type === "assistant" ? message.content : []))
++      .flatMap((part) => (part.type === "text" && part.text.trim() ? [part.text.trim()] : []))
++      .join("\n\n")
++  }
++  const copyLastReply = async () => {
++    const text = lastReply()
++    if (!text) return
++    try {
++      await (platform.writeClipboardText?.(text) ?? navigator.clipboard.writeText(text))
++      showToast({ variant: "success", icon: "circle-check", title: language.t("common.copied") })
++    } catch (err) {
++      showToast({
++        variant: "error",
++        title: language.t("command.message.copyLast.failed"),
++        description: err instanceof Error ? err.message : undefined,
++      })
++    }
++  }
++  const keyboardCmds = () => [
++    sessionCommand({
++      id: "session.interrupt",
++      title: language.t("command.session.interrupt"),
++      keybind: "alt+g",
++      disabled: !actions.session.identity.params.id || !actions.session.data.working(),
++      onSelect: () => {
++        const sessionID = actions.session.identity.params.id
++        if (sessionID) void serverSDK.api.session.interrupt({ sessionID, resume: true }).catch(() => undefined)
++      },
++    }),
++    sessionCommand({
++      id: "message.editLast",
++      title: language.t("command.message.editLast"),
++      keybind: "alt+e",
++      disabled: !actions.session.identity.params.id || actions.session.history.visibleUserMessages().length === 0,
++      onSelect: () => {
++        const last = actions.session.history.visibleUserMessages().at(-1)
++        if (last) void actions.revert.to(last.id)
++      },
++    }),
++    sessionCommand({
++      id: "message.copyLast",
++      title: language.t("command.message.copyLast"),
++      keybind: "alt+c",
++      disabled: !actions.session.identity.params.id || actions.session.history.visibleUserMessages().length === 0,
++      onSelect: copyLastReply,
++    }),
++    viewCommand({
++      id: "timeline.pageUp",
++      title: language.t("command.timeline.pageUp"),
++      keybind: "pageup",
++      when: (event) => actions.pageable(event.target),
++      editable: true,
++      onSelect: () => actions.page(-1),
++    }),
++    viewCommand({
++      id: "timeline.pageDown",
++      title: language.t("command.timeline.pageDown"),
++      keybind: "pagedown",
++      when: (event) => actions.pageable(event.target),
++      editable: true,
++      onSelect: () => actions.page(1),
++    }),
++  ]
++
+   command.register("session", () => [
+     ...sessionCmds(),
+     ...projectCmds(),
+@@ -414,5 +488,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
+     ...messageCmds(),
+     ...mcpCmds(),
+     ...permissionsCmds(),
++    ...keyboardCmds(),
+   ])
+ }
+diff --git a/packages/app/src/session/composer/region.tsx b/packages/app/src/session/composer/region.tsx
+index 9412b4725939da02007b3268ad8b7aa010862d0f..6a660046a302a8c72a40407bd8275863adcb70e8 100644
+--- a/packages/app/src/session/composer/region.tsx
++++ b/packages/app/src/session/composer/region.tsx
+@@ -164,6 +164,12 @@ export function createActiveSessionRegion(input: {
+     navigateMessageByOffset: input.timeline.actions.navigateMessage,
+     revert,
+     focusInput: focus,
++    page: input.timeline.actions.page,
++    pageable: (target) => {
++      const scroller = input.timeline.scroller()
++      const owner = target instanceof Element ? target.closest("[data-scrollable]") : null
++      return !!scroller && (editable(target) || !owner || owner === scroller)
++    },
+   })
+   command.register("session-palette", () => [
+     {
+diff --git a/packages/app/src/session/requests/session-permission-dock.tsx b/packages/app/src/session/requests/session-permission-dock.tsx
+index db54fc57c52154124072ab11aafdeee8daddf685..f0180c3c0b3dba10f64f9fdab4131ed09c1623ef 100644
+--- a/packages/app/src/session/requests/session-permission-dock.tsx
++++ b/packages/app/src/session/requests/session-permission-dock.tsx
+@@ -4,6 +4,7 @@ import { Button } from "@opencode/ui/button"
+ import { DockPrompt } from "@opencode/session-ui/dock-prompt"
+ import { Icon } from "@opencode/ui/icon"
+ import { useLanguage } from "@/runtime/i18n/language"
++import { useCommand } from "@/shell/commands/command"
+ 
+ export function SessionPermissionDock(props: {
+   request: PermissionRequest
+@@ -11,6 +12,24 @@ export function SessionPermissionDock(props: {
+   onDecide: (response: "once" | "always" | "reject") => void
+ }) {
+   const language = useLanguage()
++  const command = useCommand()
++  // ocelot: answer from the keyboard (web/keyboard) while the request is shown.
++  command.register("permission-dock", () =>
++    (
++      [
++        ["permission.allowOnce", "ui.permission.allowOnce", "alt+y", "once"],
++        ["permission.allowAlways", "ui.permission.allowAlways", "alt+a", "always"],
++        ["permission.deny", "ui.permission.deny", "alt+n", "reject"],
++      ] as const
++    ).map(([id, title, keybind, response]) => ({
++      id,
++      title: language.t(title),
++      category: language.t("command.category.permissions"),
++      keybind,
++      disabled: props.responding,
++      onSelect: () => props.onDecide(response),
++    })),
++  )
+ 
+   const toolDescription = () => {
+     const key = `settings.permissions.tool.${props.request.action}.description`
+diff --git a/packages/app/src/session/timeline/interaction.ts b/packages/app/src/session/timeline/interaction.ts
+index 15bf2dd7a5d8cc311e3f01d592a5fbba0c2c72bc..02c910e81bdf7f1b0b404bc6481617b5b26ff629 100644
+--- a/packages/app/src/session/timeline/interaction.ts
++++ b/packages/app/src/session/timeline/interaction.ts
+@@ -216,6 +216,8 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+     if (scroller) scheduleScrollState(scroller)
+   }
+   const navigateMessage = (offset: number) => {
++    // ocelot: step through user messages and reply starts alike (web/keyboard).
++    if (positionApi && (offset === -1 || offset === 1)) return positionApi.step(offset)
+     const messages = visibleUserMessages()
+     if (messages.length === 0) return
+     const current = state.messageID && messageMark === scrollMark ? state.messageID : cursor()
+@@ -379,6 +381,7 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+   return {
+     actions: {
+       navigateMessage,
++      page: (direction: -1 | 1) => positionApi?.page(direction),
+       revealMessage: (id: string, partID?: string) => revealMessage(id, partID),
+       resume,
+       setActiveMessage,
+@@ -423,6 +426,8 @@ export type SessionTimelineInteraction = ReturnType<typeof createSessionTimeline
+ type PositionApi = {
+   capture: () => TimelinePosition | undefined
+   restore: (position: TimelinePosition) => boolean
++  step: (offset: -1 | 1) => void
++  page: (direction: -1 | 1) => void
+ }
+ 
+ /** Sessions whose saved position this page load has already applied (or had none). */
+diff --git a/packages/app/src/session/timeline/virtualizer.tsx b/packages/app/src/session/timeline/virtualizer.tsx
+index 7574b5b67297ab718b42b183d8b6890a6fd9d244..3aab22cb99a1755066a6a710f9429417ef604a57 100644
+--- a/packages/app/src/session/timeline/virtualizer.tsx
++++ b/packages/app/src/session/timeline/virtualizer.tsx
+@@ -78,6 +78,9 @@ type Input = {
+   setPositionApi?: (api: {
+     capture: () => TimelinePosition | undefined
+     restore: (position: TimelinePosition) => boolean
++    /** ocelot: keyboard navigation (web/keyboard). */
++    step: (offset: -1 | 1) => void
++    page: (direction: -1 | 1) => void
+   }) => void
+ }
+ 
+@@ -385,9 +388,48 @@ export function createTimelineVirtualizer(input: Input) {
+       input.onPin()
+       virtualizer.scrollToEnd()
+     })
+-    input.setPositionApi?.({ capture: capturePosition, restore: restorePosition })
++    input.setPositionApi?.({ capture: capturePosition, restore: restorePosition, step: stepMessage, page })
+   })
+ 
++  // ocelot: keyboard navigation. Stops are each user message and the start of each reply; stepping
++  // past the last one returns to following the bottom.
++  function stepMessage(offset: -1 | 1) {
++    const root = listRoot()
++    if (!active() || !root) return
++    prepareNavigation()
++    const replied = new Set<string>()
++    const stops = rows().flatMap((row, index) => {
++      if (row._tag === "UserMessage") return [index]
++      if (row._tag !== "AssistantPart" && row._tag !== "Thinking" && row._tag !== "Error") return []
++      if (replied.has(row.userMessageID)) return []
++      replied.add(row.userMessageID)
++      return [index]
++    })
++    const tops = stops.map((index) => ({ index, top: virtualizer.getOffsetForIndex(index, "start")?.[0] }))
++    const current = root.scrollTop
++    const target =
++      offset < 0
++        ? tops.findLast((stop) => stop.top !== undefined && stop.top < current - 4)
++        : tops.find((stop) => stop.top !== undefined && stop.top > current + 4)
++    if (target) {
++      input.onUnpin()
++      virtualizer.scrollToIndex(target.index, { align: "start" })
++      return
++    }
++    if (offset > 0) {
++      input.onPin()
++      virtualizer.scrollToEnd()
++    }
++  }
++
++  function page(direction: -1 | 1) {
++    const root = listRoot()
++    if (!active() || !root) return
++    prepareNavigation()
++    if (direction < 0) input.onUnpin()
++    root.scrollBy({ top: direction * root.clientHeight * 0.85 })
++  }
++
+   // ocelot: the row at the top of the viewport and how far the viewport's top sits below it.
+   function capturePosition(): TimelinePosition | undefined {
+     const root = listRoot()
+diff --git a/packages/app/src/settings/command.tsx b/packages/app/src/settings/command.tsx
+index 1e8601d5dbe13b0d16f7d2c530881308b8ec9d35..d60a90914f5846911907ac5b7aff08cc20ba32ba 100644
+--- a/packages/app/src/settings/command.tsx
++++ b/packages/app/src/settings/command.tsx
+@@ -12,6 +12,7 @@ export function useSettingsCommand() {
+   const command = useCommand()
+   const language = useLanguage()
+   const show = useSettingsDialog()
++  const shortcuts = useSettingsDialog("shortcuts")
+ 
+   command.register("settings", () => [
+     {
+@@ -21,6 +22,14 @@ export function useSettingsCommand() {
+       keybind: "mod+comma",
+       onSelect: show,
+     },
++    // ocelot: every shortcut at a glance (web/keyboard).
++    {
++      id: "settings.shortcuts",
++      title: language.t("command.settings.shortcuts"),
++      category: language.t("command.category.settings"),
++      keybind: "alt+/",
++      onSelect: shortcuts,
++    },
+   ])
+ 
+   return show
+diff --git a/packages/app/src/shell/commands/command.tsx b/packages/app/src/shell/commands/command.tsx
+index 2893e03a805621f74c6c828ff39b2eeff992e747..b23e7a0e8ffa3f9c5bb9d13991e61c86bee25439 100644
+--- a/packages/app/src/shell/commands/command.tsx
++++ b/packages/app/src/shell/commands/command.tsx
+@@ -10,6 +10,7 @@ import { useSettings } from "@/settings/model"
+ import { keybindRenames } from "@/settings/keybinds/migration"
+ import en from "@/runtime/i18n/en"
+ import { Persist, persisted } from "@/runtime/persistence/storage"
++import { usePlatform } from "@/runtime/platform/platform"
+ 
+ const IS_MAC = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform)
+ 
+@@ -50,11 +51,42 @@ function normalizeKey(key: string) {
+   return key.toLowerCase()
+ }
+ 
++// ocelot: Option on a Mac turns digits and punctuation into other characters too; match their physical key.
++const ALT_CODES: Record<string, string> = {
++  BracketLeft: "[",
++  BracketRight: "]",
++  Slash: "/",
++  Backslash: "\\",
++  Comma: "comma",
++  Period: ".",
++  Semicolon: ";",
++  Quote: "'",
++  Minus: "-",
++  Equal: "=",
++  Backquote: "`",
++}
++
+ export function keyFromKeyboardEvent(event: KeyboardEvent) {
+   const key = normalizeKey(event.key)
+   if (!event.altKey || /^[a-z0-9]$/.test(key)) return key
+-  if (!event.code.startsWith("Key") || event.code.length !== 4) return key
+-  return event.code.slice(3).toLowerCase()
++  if (event.code.startsWith("Key") && event.code.length === 4) return event.code.slice(3).toLowerCase()
++  if (event.code.startsWith("Digit") && event.code.length === 6) return event.code.slice(5)
++  return ALT_CODES[event.code] ?? key
++}
++
++/**
++ * ocelot: the web app's defaults where the desktop ones never reach a browser page (the browser
++ * keeps mod+t, mod+w, ctrl+tab, ...) or a better one exists. Custom keybinds still win.
++ */
++const WEB_KEYBINDS: Record<string, string> = {
++  "tab.new": "alt+t",
++  "tab.close": "alt+w",
++  "tab.reopenClosed": "alt+shift+t",
++  "tab.prev": "alt+[",
++  "tab.next": "alt+]",
++  "message.previous": "alt+arrowup",
++  "message.next": "alt+arrowdown",
++  "input.focus": "alt+i,ctrl+l",
+ }
+ 
+ function signature(key: string, ctrl: boolean, meta: boolean, shift: boolean, alt: boolean) {
+@@ -303,12 +335,15 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
+       suspendCount: 0,
+     })
+     const warnedDuplicates = new Set<string>()
++    const web = usePlatform().platform === "web"
++    const defaultKeybind = (id: string, def: KeybindConfig | undefined) =>
++      web ? (WEB_KEYBINDS[actionId(id)] ?? def) : def
+ 
+     const [catalog, setCatalog, _, catalogReady] = persisted(Persist.global("command.catalog.v1"), CommandCatalog, {})
+ 
+     const bind = (id: string, def: KeybindConfig | undefined) => {
+       const custom = settings.keybinds.get(actionId(id))
+-      const config = custom ?? def
++      const config = custom ?? defaultKeybind(id, def)
+       if (!config || config === "none") return
+       return config
+     }
+@@ -347,7 +382,7 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
+               description: opt.description,
+               category: opt.category,
+               section: opt.section,
+-              keybind: opt.keybind,
++              keybind: defaultKeybind(opt.id, opt.keybind),
+               slash: opt.slash,
+             }),
+           )
+diff --git a/packages/app/src/shell/titlebar/tab-strip.tsx b/packages/app/src/shell/titlebar/tab-strip.tsx
+index 63ae4c761a0c41cf69bababdcb265fb546a93801..ea4c0ea73ddf2b3e2b1138ccbee421c506e276ac 100644
+--- a/packages/app/src/shell/titlebar/tab-strip.tsx
++++ b/packages/app/src/shell/titlebar/tab-strip.tsx
+@@ -264,6 +264,18 @@ export function TitlebarTabStrip(props: {
+       hidden: true,
+       onSelect: () => selectAdjacentTab(1),
+     },
++    // ocelot: alt+1 … alt+9 go to the tab in that position.
++    ...Array.from({ length: 9 }, (_, index) => ({
++      id: `tab.select.${index + 1}`,
++      category: "tab",
++      title: "",
++      keybind: `alt+${index + 1}`,
++      hidden: true,
++      onSelect: () => {
++        const tab = props.tabs[index]
++        if (tab) props.onNavigate(tab)
++      },
++    })),
+   ])
+ 
+   function selectAdjacentTab(offset: -1 | 1) {

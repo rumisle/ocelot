@@ -36,3 +36,4 @@ web/session-header-meta.patch
 cli/web-push.patch
 web/push-notifications.patch
 tui/push-presence.patch
+web/keyboard.patch

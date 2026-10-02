@@ -125,7 +125,7 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       focused, input in the last 3 min). Title = session title; body = the reply / "Needs
       permission · …" / the question / "Failed · …". Also notifies in the browser for permissions
       and questions (upstream had the switch but no code). The TUI reports presence too
-      (tui/push-presence: terminal focus + a key in the last 3 min), unreleased until the next bump.
+      (tui/push-presence: terminal focus + a key in the last 3 min, 2.0.22-3).
 - [x] Push confirmed on the iPhone (home screen app, 2026-10-03): delivery through
       web.push.apple.com, lock-screen look, and a tap with the app closed opens the session.
 
@@ -266,10 +266,13 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
    revert boundary and the branch switcher on assistant steps, not only user messages.
    Not possible inside one step (parallel tool calls in one response).
 10. **Shortcuts and settings.**
-   - [ ] Defaults collide with the browser: mod+w, mod+t/mod+n, mod+shift+t (browser-reserved,
-         never reach the page), mod+p, mod+f, mod+o, mod+u, mod+[ / mod+], mod+shift+r, f5,
-         ctrl+l. Give the web app its own defaults (e.g. alt- or a leader key), keep the
-         desktop ones for the desktop app.
+   - [x] Keyboard (web/keyboard, 2.0.22-3): web defaults alt+T/W/shift+T, alt+[ ] tabs, alt+I
+         input (desktop keeps its own); alt+1..9 tabs; alt+↑/↓ steps through messages and reply
+         starts; PageUp/Down scroll the transcript while typing; alt+G stops; double Esc in the
+         composer; alt+E edit last; alt+C copy last reply; alt+Y/A/N permissions; alt+/ shortcuts.
+         Combinations only (no single-key vim mode: too easy to mis-tap in a web page).
+   - [ ] Keyboard, next: act on the message in focus (copy, edit, branch ‹ ›, fork), expand or
+         collapse tool calls, the composer's + menu, a picker for sessions beyond the tabs.
    - [ ] Settings (shortcuts, auto-accept, ...) live in browser localStorage per device.
          Sync them through the server (core has a KV table; add an endpoint + a persistence
          adapter for the chosen namespaces).
