@@ -12,10 +12,10 @@ the client's generated types are regenerated (packages/client: bun run generate)
 Ocelot-Patch: core/first-output-time
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index a4890a7b9b69a14eba66419c8c0c8f06db9f8acb..9d800ac189b0725a17b5e834189e48a1b8c9a75f 100644
+index 03b56ec7d8df17beecb3f13069cd6a95bd201a79..8300d91ff83aad093c9f307339b56727a338d0b2 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
-@@ -856,7 +856,11 @@ export type SessionLogOutput =
+@@ -862,7 +862,11 @@ export type SessionLogOutput =
                  readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
                }
              | undefined
@@ -29,10 +29,10 @@ index a4890a7b9b69a14eba66419c8c0c8f06db9f8acb..9d800ac189b0725a17b5e834189e48a1
        | {
            readonly id: Event.ID
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index 4d51de939f71fd83ef0369c614f09681fa55cbe6..736b0a54572da1325d2ec7e91c89fd5366f08736 100644
+index 753d7fc781f4d1bf796e1ee18042fc90f444488f..728a3e42ccbee1980039144ca4b84df5eb912320 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
-@@ -738,7 +738,7 @@ export type SessionStepStreamed = {
+@@ -749,7 +749,7 @@ export type SessionStepStreamed = {
    type: "session.step.streamed"
    durable: { aggregateID: string; seq: number; version: 1 }
    location?: LocationRef
@@ -41,7 +41,7 @@ index 4d51de939f71fd83ef0369c614f09681fa55cbe6..736b0a54572da1325d2ec7e91c89fd53
  }
  
  export type SessionTextStarted = {
-@@ -2236,7 +2236,7 @@ export type SessionInboxEnqueued = {
+@@ -2269,7 +2269,7 @@ export type SessionInboxEnqueued = {
  export type SessionMessageAssistant = {
    id: string
    metadata?: { [x: string]: JsonValue }
@@ -50,7 +50,7 @@ index 4d51de939f71fd83ef0369c614f09681fa55cbe6..736b0a54572da1325d2ec7e91c89fd53
    type: "assistant"
    agent: string
    model: ModelRef
-@@ -3121,7 +3121,12 @@ export type SessionImportInput = {
+@@ -3183,7 +3183,12 @@ export type SessionImportInput = {
        | {
            readonly id: string
            readonly metadata?: { readonly [x: string]: JsonValue }
@@ -64,7 +64,7 @@ index 4d51de939f71fd83ef0369c614f09681fa55cbe6..736b0a54572da1325d2ec7e91c89fd53
            readonly type: "assistant"
            readonly agent: string
            readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
-@@ -3438,7 +3443,12 @@ export type SessionImportInput = {
+@@ -3520,7 +3525,12 @@ export type SessionImportInput = {
        | {
            readonly id: string
            readonly metadata?: { readonly [x: string]: JsonValue }
@@ -78,7 +78,7 @@ index 4d51de939f71fd83ef0369c614f09681fa55cbe6..736b0a54572da1325d2ec7e91c89fd53
            readonly type: "assistant"
            readonly agent: string
            readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
-@@ -3755,7 +3765,12 @@ export type SessionImportInput = {
+@@ -3857,7 +3867,12 @@ export type SessionImportInput = {
        | {
            readonly id: string
            readonly metadata?: { readonly [x: string]: JsonValue }
@@ -133,7 +133,7 @@ index 6d2a40e4195a30707cd5397bf8a422a50bb40936..e39c659e2cafa2990cd8ee62c140bff2
        },
        "session.step.ended": (event) => {
 diff --git a/packages/core/src/session/runner/publish-llm-event.ts b/packages/core/src/session/runner/publish-llm-event.ts
-index 03367a8ed1b020f031d9f75eaedcb4a215ba6d18..cf970bd4bfb007338af12d3e63e23fcab0feb5fb 100644
+index 988afb70b0ee7ff2e524733716fe9155812f73b6..4b7d4c1078f2c5139be0ca4a78fb20dc1980accf 100644
 --- a/packages/core/src/session/runner/publish-llm-event.ts
 +++ b/packages/core/src/session/runner/publish-llm-event.ts
 @@ -93,6 +93,8 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp

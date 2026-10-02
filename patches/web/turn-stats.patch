@@ -20,11 +20,11 @@ Short labels so it fits one line on a phone.
 Ocelot-Patch: web/turn-stats
 
 diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
-index 73552e6e47dfd01e9cd1f008b7c5580e7034c3d6..97427b5bf9705331daf1fd6cf98e1a0b18d84576 100644
+index 883a861854f1b96f930b6a048afc455b1a75a88e..823fe38b7de70b61e725e036a33307c2610fa968 100644
 --- a/packages/session-ui/src/message/current-message.tsx
 +++ b/packages/session-ui/src/message/current-message.tsx
-@@ -5,7 +5,12 @@ import type {
- } from "@opencode/client/promise"
+@@ -1,7 +1,12 @@
+ import type { SessionMessageAssistant, SessionMessageAssistantTool, SessionMessageUser } from "@opencode/client/promise"
  import { Match, Switch, type ComponentProps } from "solid-js"
  import type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
 -import { AssistantReasoningContent, AssistantTextContent, CurrentUserMessageDisplay } from "./message-content"
@@ -34,10 +34,10 @@ index 73552e6e47dfd01e9cd1f008b7c5580e7034c3d6..97427b5bf9705331daf1fd6cf98e1a0b
 +  CurrentUserMessageDisplay,
 +  type TurnStats,
 +} from "./message-content"
- import { CurrentContextToolGroup, CurrentFileToolGroup, ToolDisplay } from "../tools/tool-renderer"
- import { currentToolError, currentToolInput, currentToolMetadata, currentToolOutput } from "./current-tool-state"
- 
-@@ -43,6 +48,7 @@ export function SessionAssistantContent(props: {
+ import {
+   CurrentContextToolGroup,
+   CurrentFileToolGroup,
+@@ -44,6 +49,7 @@ export function SessionAssistantContent(props: {
    contentID: string
    showAssistantCopyPartID?: string | null
    turnDurationMs?: number | null
@@ -45,7 +45,7 @@ index 73552e6e47dfd01e9cd1f008b7c5580e7034c3d6..97427b5bf9705331daf1fd6cf98e1a0b
    defaultOpen?: boolean
    reasoningDefaultOpen?: boolean
    toolOpen?: boolean
-@@ -59,6 +65,7 @@ export function SessionAssistantContent(props: {
+@@ -60,6 +66,7 @@ export function SessionAssistantContent(props: {
              message={props.message}
              showCopy={props.showAssistantCopyPartID === props.contentID}
              turnDurationMs={props.turnDurationMs}
@@ -54,10 +54,10 @@ index 73552e6e47dfd01e9cd1f008b7c5580e7034c3d6..97427b5bf9705331daf1fd6cf98e1a0b
          )}
        </Match>
 diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
-index ee7b53c2b4daeed32dedea8bc543eafbd5cb8825..c965aeb1efe5bcfcc1ab358acaad8458c669fec3 100644
+index 4bb4770ec0d36c5be448db9c66c56874657c16a1..c07c917d7066fb8e08b855b0765b910f11163582 100644
 --- a/packages/session-ui/src/message/message-content.tsx
 +++ b/packages/session-ui/src/message/message-content.tsx
-@@ -451,6 +451,7 @@ export function AssistantTextContent(props: {
+@@ -454,6 +454,7 @@ export function AssistantTextContent(props: {
    message: SessionMessageAssistant
    showCopy: boolean
    turnDurationMs?: number | null
@@ -65,7 +65,7 @@ index ee7b53c2b4daeed32dedea8bc543eafbd5cb8825..c965aeb1efe5bcfcc1ab358acaad8458
  }) {
    const i18n = useI18n()
    const numfmt = createMemo(() => new Intl.NumberFormat(i18n.locale()))
-@@ -477,8 +478,15 @@ export function AssistantTextContent(props: {
+@@ -480,8 +481,15 @@ export function AssistantTextContent(props: {
      })
    })
    const meta = createMemo(() => {
@@ -81,7 +81,7 @@ index ee7b53c2b4daeed32dedea8bc543eafbd5cb8825..c965aeb1efe5bcfcc1ab358acaad8458
        interrupted() ? i18n.t("ui.message.interrupted") : "",
      ]
        .filter(Boolean)
-@@ -511,7 +519,15 @@ export function AssistantTextContent(props: {
+@@ -514,7 +522,15 @@ export function AssistantTextContent(props: {
                aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
              />
              <Show when={meta()}>
@@ -98,7 +98,7 @@ index ee7b53c2b4daeed32dedea8bc543eafbd5cb8825..c965aeb1efe5bcfcc1ab358acaad8458
                  {meta()}
                </span>
              </Show>
-@@ -522,6 +538,39 @@ export function AssistantTextContent(props: {
+@@ -525,6 +541,39 @@ export function AssistantTextContent(props: {
    )
  }
  
@@ -139,7 +139,7 @@ index ee7b53c2b4daeed32dedea8bc543eafbd5cb8825..c965aeb1efe5bcfcc1ab358acaad8458
    id: string
    content: SessionMessageAssistantReasoning
 diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
-index ee677260e686b1cdb49b0604fac5631db903b10c..ce8b9034ce020bfe47a4be11fb53d576e431461d 100644
+index 55bf15e541488bd14fa1b4837cc9f8700786b06f..f2d80e94c5f954292aac482bd32b2f56ff170cde 100644
 --- a/packages/session-ui/src/timeline/session-timeline-row.tsx
 +++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
 @@ -104,6 +104,38 @@ export function createSessionTimelineRowRenderer(input: {
@@ -181,7 +181,7 @@ index ee677260e686b1cdb49b0604fac5631db903b10c..ce8b9034ce020bfe47a4be11fb53d576
    const copyContentID = (messageID: string) => {
      if (workingTurn(messageID)) return null
      const message = input.projection
-@@ -276,6 +308,7 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -296,6 +328,7 @@ export function createSessionTimelineRowRenderer(input: {
                  contentID={ref()!.partID}
                  showAssistantCopyPartID={copyContentID(row().userMessageID)}
                  turnDurationMs={duration(row().userMessageID)}

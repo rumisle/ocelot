@@ -145,7 +145,7 @@ index 5b648e5300b6cc101149d845b6d28b5aad3d92f3..f2852b674a4013b628aca48f2b4351ac
 -  )
 -}
 diff --git a/packages/app/src/composer/editor/editor.tsx b/packages/app/src/composer/editor/editor.tsx
-index bec7da700e257489af8d6c7d09eb35cf346b9942..930a07fe25bd343650d89afcb2c8727b64b32a06 100644
+index b6fd2d8f30845528e6672cb36565d9115d44a57a..fa32bb36556c24f8da0602bb5a8e15ac7602c554 100644
 --- a/packages/app/src/composer/editor/editor.tsx
 +++ b/packages/app/src/composer/editor/editor.tsx
 @@ -1,15 +1,4 @@
@@ -443,18 +443,7 @@ index bec7da700e257489af8d6c7d09eb35cf346b9942..930a07fe25bd343650d89afcb2c8727b
              <Show when={state.mode === "normal"}>
                <ComposerEditorAlternateDelivery
                  controller={props.controller}
-@@ -514,9 +458,7 @@ export function ComposerAttachments(props: {
-   const i18n = useI18n()
-   const percent = (upload: Upload) => (upload.size === 0 ? 100 : Math.floor((upload.loaded / upload.size) * 100))
-   return (
--    <Show
--      when={props.attachments.length > 0 || (props.uploads?.length ?? 0) > 0 || (props.comments?.length ?? 0) > 0}
--    >
-+    <Show when={props.attachments.length > 0 || (props.uploads?.length ?? 0) > 0 || (props.comments?.length ?? 0) > 0}>
-       <div data-component="composer-attachments" data-slot="composer-attachments" class="relative">
-         <div
-           data-slot="composer-attachments-scroll"
-@@ -646,7 +588,36 @@ export function ComposerEditorAddMenu(props: {
+@@ -647,7 +591,36 @@ export function ComposerEditorAddMenu(props: {
    onCommands: () => void
    onContext: () => void
    onShell: () => void
@@ -491,7 +480,7 @@ index bec7da700e257489af8d6c7d09eb35cf346b9942..930a07fe25bd343650d89afcb2c8727b
    return (
      <Tooltip
        placement="top"
-@@ -671,8 +642,24 @@ export function ComposerEditorAddMenu(props: {
+@@ -672,8 +645,24 @@ export function ComposerEditorAddMenu(props: {
          <Menu.Portal>
            <Menu.Content
              class="[&_[data-slot=menu-v2-item-shortcut]]:w-5 [&_[data-slot=menu-v2-item-shortcut]]:justify-center"

@@ -56,12 +56,12 @@ Open:
 - Never test against real models. Use a fake provider (like opencode-octopi's
   `test/fake-anthropic.ts`) and a throwaway server with its own XDG dirs.
 - `scripts/dev-server.sh start` runs one: the built binary + `test/fake-anthropic.ts` (streams with
-  realistic timings and cache usage; `LINES n`, `SHELL cmd`), web UI at http://127.0.0.1:4852 (opencode / test).
+  realistic timings and cache usage; `LINES n`, `SHELL cmd`, `ECHO text`), web UI at http://127.0.0.1:4852 (opencode / test).
 - Unit tests: `scripts/test.sh [pkg ...]` or `scripts/test.sh pkg file ...`. It uses the pinned bun
   (1.4.2, not the system 1.3.11) and each package's own runner (core's script/test.ts sets the test
   HOME, app needs the happydom preload). Plain `bun test` gave ~40 false failures (plugin reload,
-  watcher, preload, app SSR). Baseline 2026-10-02: core 5568/0, server 65/0, app 930/0; client 4
-  and cli 22 known (see the script header).
+  watcher, preload, app SSR). Baseline 2026-10-03 (v2.0.22): core 5620/0, server 67/0, app 728/0,
+  gui-extensions 102/0, session-ui 199/0; client 4 and cli 22 known (see the script header).
 
 ## 1. Plugin API (server)
 
@@ -75,8 +75,12 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       Note: after a restart the server resumes children only through a subagent job, so octopi
       resumes its own stopped children.
 
+      Upstream v2.0.22 added `parentID` on create (#52359); the patch now only keeps the explicit
+      child location and fork `child: true`.
+
 - [ ] Fork.
-- [ ] Compact.
+- [x] Compact: upstream v2.0.22 `session.compact` (#52385); also `session.remove` (#52387).
+      opencode-octopi can drop its workaround.
 - [ ] Full message reads / list (drop the SQLite read).
 
 ## 2. Web UI

@@ -14,10 +14,10 @@ switcher stays visible; the other actions still wait for hover on desktop.
 Ocelot-Patch: web/message-branches
 
 diff --git a/packages/app/src/session/composer/region.tsx b/packages/app/src/session/composer/region.tsx
-index 86fefd7b4d42ffcfdb662ef6fb6893fdf12a9dfe..1fa983fc35bb4017c90210256a082043cd2edd03 100644
+index 5e8f10232cec519ee7037dc44cac5c364c05e0f2..9412b4725939da02007b3268ad8b7aa010862d0f 100644
 --- a/packages/app/src/session/composer/region.tsx
 +++ b/packages/app/src/session/composer/region.tsx
-@@ -203,6 +203,7 @@ export function createActiveSessionRegion(input: {
+@@ -204,6 +204,7 @@ export function createActiveSessionRegion(input: {
            if (input.session.data.isChild()) return
            return revertMessage
          },
@@ -26,7 +26,7 @@ index 86fefd7b4d42ffcfdb662ef6fb6893fdf12a9dfe..1fa983fc35bb4017c90210256a082043
        } satisfies SessionUserActions,
      },
 diff --git a/packages/app/src/session/revert.ts b/packages/app/src/session/revert.ts
-index 6a47fa834b8fd916b346587fabd3de172bc4bebf..a6dae7cc589d6232dc64d1fc6e989e57362d6701 100644
+index 4bb7bc1add446d8bd6e674db5422beeaec31ad47..8b09699f665eb27adcf47a6f6eca06c79dfa0383 100644
 --- a/packages/app/src/session/revert.ts
 +++ b/packages/app/src/session/revert.ts
 @@ -1,4 +1,6 @@
@@ -36,7 +36,7 @@ index 6a47fa834b8fd916b346587fabd3de172bc4bebf..a6dae7cc589d6232dc64d1fc6e989e57
  import { useComposerState } from "@/composer/persistence"
  import { useData } from "@/runtime/server/current"
  import { useServerSDK } from "@/runtime/server/client"
-@@ -118,7 +120,35 @@ export function createSessionRevert(input: {
+@@ -110,7 +112,35 @@ export function createSessionRevert(input: {
      owner.run(() => input.setActiveMessage(messages.at(-1)))
    }
  
@@ -74,10 +74,10 @@ index 6a47fa834b8fd916b346587fabd3de172bc4bebf..a6dae7cc589d6232dc64d1fc6e989e57
  
  export type SessionRevert = ReturnType<typeof createSessionRevert>
 diff --git a/packages/session-ui/src/actions.ts b/packages/session-ui/src/actions.ts
-index 7b7a4bfdd923ff6d7188a289ba6227a5a44ead33..af20f435e624f1d6b08d5c37e58c1866c51b68d2 100644
+index 3d1cf7354d6a9949854436e509c7d5f16bc403b9..41044facecf1c84c12c6732014a32aa641a4d20e 100644
 --- a/packages/session-ui/src/actions.ts
 +++ b/packages/session-ui/src/actions.ts
-@@ -19,4 +19,15 @@ export type SessionUserAttachmentReference = {
+@@ -28,4 +28,15 @@ export type SessionUserAttachmentReference = {
  export type SessionUserActions = {
    openAttachment?: (file: PromptFileAttachment) => void
    revert?: (input: { sessionID: string; messageID: string }) => Promise<void> | void
@@ -94,7 +94,7 @@ index 7b7a4bfdd923ff6d7188a289ba6227a5a44ead33..af20f435e624f1d6b08d5c37e58c1866
 +  next?: () => Promise<void> | void
  }
 diff --git a/packages/session-ui/src/components/message-part.css b/packages/session-ui/src/components/message-part.css
-index c30c36b9115503892dac4ac4b5cea08faffa7064..94d38406619d506d2d0feb89018882cb7be0acb0 100644
+index 75457c008632675b4e42adbbb0e0efb7c1ce4ad2..ad081165e00f443cb0e7c7ef637be4429259a546 100644
 --- a/packages/session-ui/src/components/message-part.css
 +++ b/packages/session-ui/src/components/message-part.css
 @@ -216,6 +216,28 @@
@@ -127,11 +127,11 @@ index c30c36b9115503892dac4ac4b5cea08faffa7064..94d38406619d506d2d0feb89018882cb
      color: var(--v2-text-text-base);
    }
 diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
-index 97427b5bf9705331daf1fd6cf98e1a0b18d84576..c33e862acac09db7dc532688f42bc8d0fb53aec4 100644
+index 823fe38b7de70b61e725e036a33307c2610fa968..3478069b02864a570475ae18f340c638b9242f68 100644
 --- a/packages/session-ui/src/message/current-message.tsx
 +++ b/packages/session-ui/src/message/current-message.tsx
-@@ -14,7 +14,12 @@ import {
- import { CurrentContextToolGroup, CurrentFileToolGroup, ToolDisplay } from "../tools/tool-renderer"
+@@ -15,7 +15,12 @@ import {
+ } from "../tools/tool-renderer"
  import { currentToolError, currentToolInput, currentToolMetadata, currentToolOutput } from "./current-tool-state"
  
 -export type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
@@ -145,7 +145,7 @@ index 97427b5bf9705331daf1fd6cf98e1a0b18d84576..c33e862acac09db7dc532688f42bc8d0
  export { currentContentDefaultOpen } from "./current-tool-state"
  
 diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
-index c965aeb1efe5bcfcc1ab358acaad8458c669fec3..00f88362efdab1ed4a70886ab276cff4cf059b9a 100644
+index c07c917d7066fb8e08b855b0765b910f11163582..54fecd16413377cadbe682c7433e911ce15829c9 100644
 --- a/packages/session-ui/src/message/message-content.tsx
 +++ b/packages/session-ui/src/message/message-content.tsx
 @@ -54,7 +54,7 @@ export async function writeClipboard(text: string): Promise<boolean> {
@@ -157,7 +157,7 @@ index c965aeb1efe5bcfcc1ab358acaad8458c669fec3..00f88362efdab1ed4a70886ab276cff4
      label: JSX.Element
    },
  ) {
-@@ -211,7 +211,17 @@ export function CurrentUserMessageDisplay(props: {
+@@ -214,7 +214,17 @@ export function CurrentUserMessageDisplay(props: {
  }) {
    const dialog = useDialog()
    const i18n = useI18n()
@@ -176,7 +176,7 @@ index c965aeb1efe5bcfcc1ab358acaad8458c669fec3..00f88362efdab1ed4a70886ab276cff4
    const attachments = createMemo(() => (props.message.files ?? []).filter(attached))
    const references = createMemo(() => props.references ?? [])
    const inlineFiles = createMemo(() => (props.message.files ?? []).filter((file) => !!file.mention))
-@@ -298,9 +308,44 @@ export function CurrentUserMessageDisplay(props: {
+@@ -301,9 +311,44 @@ export function CurrentUserMessageDisplay(props: {
        {renderAttachments()}
        <Show when={props.text || comments().length > 0}>
          <div data-slot="user-message-copy-wrapper">

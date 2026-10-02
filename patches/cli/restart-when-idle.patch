@@ -19,10 +19,10 @@ its progress is `<registration>.restart`, shown by `ocelot service status`.
 Ocelot-Patch: cli/restart-when-idle
 
 diff --git a/packages/cli/src/commands/commands.ts b/packages/cli/src/commands/commands.ts
-index f5622d215fa51d65d62684f61b5524a9002dfab2..7cf7dc26dbfdca1726626b67bd2800ad8da67633 100644
+index 6adc263a692dd507bee3633da0215be95c882c81..1292a471fdb84f1a742a02409aef5cd30405bcef 100644
 --- a/packages/cli/src/commands/commands.ts
 +++ b/packages/cli/src/commands/commands.ts
-@@ -452,7 +452,16 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
+@@ -472,7 +472,16 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
        description: "Manage the background server",
        commands: [
          Spec.make("start", { description: "Start the background server" }),
@@ -321,7 +321,7 @@ index 0000000000000000000000000000000000000000..5d4af22d1d50b0a1bdf4943645b30603
 +  }
 +}
 diff --git a/packages/cli/src/services/server-connection.ts b/packages/cli/src/services/server-connection.ts
-index 5d2619ad424324afb63f2e1c6469f7478a57b462..000c41fd5bfad3716a861d694611ad97c346bf77 100644
+index db0d07ce2b751d8f79933e5e5368b6ba45dda183..438da4cef744047ad8028a344f12c40a56c4cdb2 100644
 --- a/packages/cli/src/services/server-connection.ts
 +++ b/packages/cli/src/services/server-connection.ts
 @@ -5,6 +5,7 @@ import { Effect, Redacted } from "effect"
@@ -347,10 +347,10 @@ index 5d2619ad424324afb63f2e1c6469f7478a57b462..000c41fd5bfad3716a861d694611ad97
  
    const compatible = yield* Service.discover(options)
 diff --git a/packages/cli/src/services/service-config.ts b/packages/cli/src/services/service-config.ts
-index d857efa919c658d18f1118eed47c33c5fc725197..a01a7f17d3743035236751696750b667ce913a74 100644
+index e6528fe8aafb2b419136f3a406be162e4ba30fe8..2acfd6d678f380461ad34eccc0760d358e7e78c1 100644
 --- a/packages/cli/src/services/service-config.ts
 +++ b/packages/cli/src/services/service-config.ts
-@@ -17,10 +17,12 @@ export const Info = Schema.Struct({
+@@ -18,10 +18,12 @@ export const Info = Schema.Struct({
    password: Schema.optional(Schema.String),
    cors: Schema.optional(Schema.Array(Schema.String)),
    env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -359,29 +359,22 @@ index d857efa919c658d18f1118eed47c33c5fc725197..a01a7f17d3743035236751696750b667
  })
  export type Info = typeof Info.Type
  
--const keys = ["hostname", "port", "password", "cors", "env"] as const
-+const keys = ["hostname", "port", "password", "cors", "env", "restart"] as const
+-const keys = ["disabled", "hostname", "port", "password", "cors", "env"] as const
++const keys = ["disabled", "hostname", "port", "password", "cors", "env", "restart"] as const
  type Key = (typeof keys)[number]
  
  const decodeInfo = Schema.decodeUnknownEffect(Schema.fromJsonString(Info))
-@@ -78,7 +80,15 @@ export const migrateConfig = Effect.fnUntraced(function* (legacy: string, file:
- })
- 
- function configKey(key: string): Key {
--  if (key === "hostname" || key === "port" || key === "password" || key === "cors" || key === "env") return key
-+  if (
-+    key === "hostname" ||
-+    key === "port" ||
-+    key === "password" ||
-+    key === "cors" ||
+@@ -85,7 +87,8 @@ function configKey(key: string): Key {
+     key === "port" ||
+     key === "password" ||
+     key === "cors" ||
+-    key === "env"
 +    key === "env" ||
 +    key === "restart"
-+  )
-+    return key
+   )
+     return key
    throw new Error(`Unknown service config key: ${key}`)
- }
- 
-@@ -168,6 +178,9 @@ export const get = Effect.fn("cli.service-config.get")(function* (key?: string,
+@@ -180,6 +183,9 @@ export const get = Effect.fn("cli.service-config.get")(function* (key?: string,
        const env = (yield* read()).env ?? {}
        return name === undefined ? JSON.stringify(env, null, 2) : (env[name] ?? "")
      }
@@ -391,7 +384,7 @@ index d857efa919c658d18f1118eed47c33c5fc725197..a01a7f17d3743035236751696750b667
    }
    throw new Error(`Unknown service config key: ${key}`)
  })
-@@ -214,6 +227,12 @@ export const set = Effect.fn("cli.service-config.set")(function* (key: string, v
+@@ -232,6 +238,12 @@ export const set = Effect.fn("cli.service-config.set")(function* (key: string, v
        yield* write({ ...(yield* read()), cors })
        return
      }
@@ -404,7 +397,7 @@ index d857efa919c658d18f1118eed47c33c5fc725197..a01a7f17d3743035236751696750b667
    }
  })
  
-@@ -254,6 +273,11 @@ export const unset = Effect.fn("cli.service-config.unset")(function* (key: strin
+@@ -277,6 +289,11 @@ export const unset = Effect.fn("cli.service-config.unset")(function* (key: strin
        yield* write(next)
        return
      }

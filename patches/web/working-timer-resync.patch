@@ -14,7 +14,7 @@ during hydration still wins.
 Ocelot-Patch: web/working-timer-resync
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index ce8435a911969e2a57e6cc423a0deeab00a6d485..d6c58f7034103aa1e8694a60612736164ad5d946 100644
+index 723880a08494685fc6236773daf43fd19518c1ba..69ac9426a46b5c76e41b971cc66d959784ee5891 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
 @@ -221,7 +221,9 @@ export type SessionExportInput = { readonly sessionID: Session.ID; readonly sani
@@ -29,7 +29,7 @@ index ce8435a911969e2a57e6cc423a0deeab00a6d485..d6c58f7034103aa1e8694a6061273616
  
  export type SessionGetInput = { readonly sessionID: Session.ID }
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index 38599b1fb93d588934a3218b2bb7d936f63477d6..dcb84cb5d12ded7be9cb910954a13b5467249968 100644
+index eb19b97313f422f92f98ba0ebf300ed89db05ee8..86cb5b8ecd83f8c316f1950a538da322999dbb33 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
 @@ -173,7 +173,7 @@ export type SessionMessageNotice = {
@@ -124,7 +124,7 @@ index eeed241ae14e30645d4e0904c69d3ebfe919ef38..7d87e8130c7ec5404f84b8b0907860b7
        interrupt: (sessionID, options) =>
          Effect.gen(function* () {
 diff --git a/packages/protocol/src/groups/session.ts b/packages/protocol/src/groups/session.ts
-index a5d112d0fcab4ea98f8cd5bed68ece0de3d37fc2..56e9d752b37d24e94cfde7e87584d738541c8cdf 100644
+index 701008e83923fd13fcbfd2c2f1e37e46bc99a24e..1b4a0bd632fd834c5bf514c4a0e3b83276f96ee4 100644
 --- a/packages/protocol/src/groups/session.ts
 +++ b/packages/protocol/src/groups/session.ts
 @@ -115,6 +115,8 @@ export type SessionsCursor = typeof SessionsCursor.Type
@@ -137,7 +137,7 @@ index a5d112d0fcab4ea98f8cd5bed68ece0de3d37fc2..56e9d752b37d24e94cfde7e87584d738
  
  const PublicSessionInfo = Schema.Struct({
 diff --git a/packages/server/src/handlers/session.ts b/packages/server/src/handlers/session.ts
-index a929ac44709290f9fa2c0119992eb1407f2cf754..5eeb85fda8670be73d3c2f68a6ce4853e675df83 100644
+index ff29655c34fd4bfb1ee6415a3635aa3efe98c5a5..e4dc17316a862b49615a890c617d42c498842c83 100644
 --- a/packages/server/src/handlers/session.ts
 +++ b/packages/server/src/handlers/session.ts
 @@ -181,8 +181,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl

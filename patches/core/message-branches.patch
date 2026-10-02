@@ -27,7 +27,7 @@ messages when a branch is switched elsewhere.
 Ocelot-Patch: core/message-branches
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index e3026a8f8a4bcc653973f0e92bf191e7087f79be..e05af09eb627166cc35e9c4023fc9a9803ba74e6 100644
+index 6c54cf0bd44daed6c1358ae6e099f7c74db14273..9cbb806d3fd51fa4a03c386886d29f758a9fcb6c 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
 @@ -380,6 +380,26 @@ export type SessionRevertCommitOperation<E = never> = (
@@ -57,7 +57,7 @@ index e3026a8f8a4bcc653973f0e92bf191e7087f79be..e05af09eb627166cc35e9c4023fc9a98
  export type SessionContextInput = { readonly sessionID: Session.ID }
  export type SessionContextOutput = ReadonlyArray<SessionMessage.Info>
  export type SessionContextOperation<E = never> = (input: SessionContextInput) => Effect.Effect<SessionContextOutput, E>
-@@ -1355,6 +1375,20 @@ export type SessionLogOutput =
+@@ -1380,6 +1400,20 @@ export type SessionLogOutput =
              | undefined
            readonly data: { readonly sessionID: Session.ID; readonly to: SessionMessage.ID }
          }
@@ -78,7 +78,7 @@ index e3026a8f8a4bcc653973f0e92bf191e7087f79be..e05af09eb627166cc35e9c4023fc9a98
        | {
            readonly id: Event.ID
            readonly created: number
-@@ -1497,6 +1531,7 @@ export interface SessionApi<E = never> {
+@@ -1526,6 +1560,7 @@ export interface SessionApi<E = never> {
      readonly clear: SessionRevertClearOperation<E>
      readonly commit: SessionRevertCommitOperation<E>
    }
@@ -87,7 +87,7 @@ index e3026a8f8a4bcc653973f0e92bf191e7087f79be..e05af09eb627166cc35e9c4023fc9a98
    readonly diff: SessionDiffOperation<E>
    readonly inbox: {
 diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
-index 4ef8d2ea20ad86a30ca4d4289ccc3626b1245743..6816d0744266d2dc4e02e213f3c3b82ee0c01eb6 100644
+index a7a2f142d039e085c3e4281a1f2adcbb36c73da5..a203531ea65fe9ecc5364e8afa4bb7b1fa13bfc2 100644
 --- a/packages/client/src/effect/generated/client.ts
 +++ b/packages/client/src/effect/generated/client.ts
 @@ -69,6 +69,10 @@ import type {
@@ -101,7 +101,7 @@ index 4ef8d2ea20ad86a30ca4d4289ccc3626b1245743..6816d0744266d2dc4e02e213f3c3b82e
    SessionContextInput,
    SessionContextOutput,
    SessionDiffInput,
-@@ -609,6 +613,25 @@ const EndpointSessionRevertCommit = (raw: RawClient["server.session"]) => (input
+@@ -612,6 +616,25 @@ const EndpointSessionRevertCommit = (raw: RawClient["server.session"]) => (input
      raw["session.revert.commit"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
    )
  
@@ -127,7 +127,7 @@ index 4ef8d2ea20ad86a30ca4d4289ccc3626b1245743..6816d0744266d2dc4e02e213f3c3b82e
  const EndpointSessionContext = (raw: RawClient["server.session"]) => (input: SessionContextInput) =>
    preserveEffect<SessionContextOutput>()(
      raw["session.context"]({ params: { sessionID: input["sessionID"] } }).pipe(
-@@ -802,6 +825,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
+@@ -806,6 +829,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
      clear: EndpointSessionRevertClear(raw),
      commit: EndpointSessionRevertCommit(raw),
    },
@@ -136,7 +136,7 @@ index 4ef8d2ea20ad86a30ca4d4289ccc3626b1245743..6816d0744266d2dc4e02e213f3c3b82e
    diff: EndpointSessionDiff(raw),
    inbox: {
 diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
-index e9a14453e12816c18af257868d022585dec20307..a0457753fea9b135a60d6b50872be1a90f70f019 100644
+index 6e8f0d922716b0224bffe76e689cf1b7f3463e39..e859a2e5e05ac9433a5296268f94b6ab04253d05 100644
 --- a/packages/client/src/promise/generated/client.ts
 +++ b/packages/client/src/promise/generated/client.ts
 @@ -63,6 +63,10 @@ import type {
@@ -150,7 +150,7 @@ index e9a14453e12816c18af257868d022585dec20307..a0457753fea9b135a60d6b50872be1a9
    SessionContextInput,
    SessionContextOutput,
    SessionDiffInput,
-@@ -867,6 +871,31 @@ export function make(options: ClientOptions) {
+@@ -870,6 +874,31 @@ export function make(options: ClientOptions) {
              requestOptions,
            ),
        },
@@ -183,10 +183,10 @@ index e9a14453e12816c18af257868d022585dec20307..a0457753fea9b135a60d6b50872be1a9
          request<{ readonly data: SessionContextOutput }>(
            {
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index 36c7334c9074562267e59591747bbb3980d13e4b..d269c89d834a0f6a84bde3811cc4207b3d189576 100644
+index af13fb83299b4e3582c008271188048a420f05be..a7b3e7209e521d906ca50f643fa7a215e4e9802c 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
-@@ -855,6 +855,16 @@ export type SessionRevertCommitted = {
+@@ -866,6 +866,16 @@ export type SessionRevertCommitted = {
    data: { sessionID: string; to: string }
  }
  
@@ -203,7 +203,7 @@ index 36c7334c9074562267e59591747bbb3980d13e4b..d269c89d834a0f6a84bde3811cc4207b
  export type SessionUsageRecorded = {
    id: string
    created: number
-@@ -2392,6 +2402,7 @@ export type SessionEventDurable =
+@@ -2433,6 +2443,7 @@ export type SessionEventDurable =
    | SessionRevertStaged
    | SessionRevertCleared
    | SessionRevertCommitted
@@ -211,7 +211,7 @@ index 36c7334c9074562267e59591747bbb3980d13e4b..d269c89d834a0f6a84bde3811cc4207b
    | SessionUsageRecorded
    | SessionMessageContentUpdated
  
-@@ -2462,6 +2473,7 @@ export type V2Event =
+@@ -2503,6 +2514,7 @@ export type V2Event =
    | SessionRevertStaged
    | SessionRevertCleared
    | SessionRevertCommitted
@@ -219,7 +219,7 @@ index 36c7334c9074562267e59591747bbb3980d13e4b..d269c89d834a0f6a84bde3811cc4207b
    | FilesystemChanged
    | ReferenceUpdated
    | PermissionAsked
-@@ -4572,6 +4584,23 @@ export type SessionRevertCommitInput = { readonly sessionID: { readonly sessionI
+@@ -4673,6 +4685,23 @@ export type SessionRevertCommitInput = { readonly sessionID: { readonly sessionI
  
  export type SessionRevertCommitOutput = void
  
@@ -1004,7 +1004,7 @@ index bc3906857760aabf417b6e663482a9ec360e5439..cce2e934720467e3b11903debbbc24a3
 +  )
 +})
 diff --git a/packages/protocol/openapi.json b/packages/protocol/openapi.json
-index 486de02f311812d27f8981892551b1ab489a4f45..788b59060c3fc62bf77feceab6ca91551a76cbe5 100644
+index 0a53e4572694447c07a1a4bb96eb4c713c435eb5..5a3b5cdf0f17fecd2b98f88d14aa47a2cbde9df5 100644
 --- a/packages/protocol/openapi.json
 +++ b/packages/protocol/openapi.json
 @@ -3197,6 +3197,248 @@
@@ -1257,7 +1257,7 @@ index 486de02f311812d27f8981892551b1ab489a4f45..788b59060c3fc62bf77feceab6ca9155
        "get": {
          "tags": ["session"],
 diff --git a/packages/protocol/src/groups/session.ts b/packages/protocol/src/groups/session.ts
-index 1fc15544b53b45672d5adb9e70b996aebdbced03..a5d112d0fcab4ea98f8cd5bed68ece0de3d37fc2 100644
+index 0d9d2dd101fd550940a6471d68069ac00a3387c7..701008e83923fd13fcbfd2c2f1e37e46bc99a24e 100644
 --- a/packages/protocol/src/groups/session.ts
 +++ b/packages/protocol/src/groups/session.ts
 @@ -593,6 +593,50 @@ export const makeSessionGroup = <
@@ -1343,7 +1343,7 @@ index 1733b28924a1c90e6971cb5858d1a62a4c36e4b9..bbba8a85e93567045e57ee0fc0c598de
  
  // Internal and replay-only events are excluded from the public manifest.
 diff --git a/packages/server/src/handlers/session.ts b/packages/server/src/handlers/session.ts
-index 0d7ed39a40a8f098351b75001594b4cf36a613bd..a929ac44709290f9fa2c0119992eb1407f2cf754 100644
+index 5bbd6a863b20488ff39b619f7dc07f9b979d7b1e..ff29655c34fd4bfb1ee6415a3635aa3efe98c5a5 100644
 --- a/packages/server/src/handlers/session.ts
 +++ b/packages/server/src/handlers/session.ts
 @@ -513,6 +513,30 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl

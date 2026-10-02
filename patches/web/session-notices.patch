@@ -13,29 +13,25 @@ Plugin notices (patch core/session-notices) render like the other timeline notic
 Ocelot-Patch: web/session-notices
 
 diff --git a/packages/session-ui/src/timeline/projection.ts b/packages/session-ui/src/timeline/projection.ts
-index effcaa9ba2f6f413e464f2dca96c1358904b2e36..9f899944eceb20da966d4271b50b0cc5bf674385 100644
+index f51ab32fb96c31c3427cb20a31c0806f1b1a4001..fdccf3e9ea8fc5f339c79968163317d841cf6bc9 100644
 --- a/packages/session-ui/src/timeline/projection.ts
 +++ b/packages/session-ui/src/timeline/projection.ts
-@@ -271,7 +271,13 @@ export namespace Timeline {
-             detail,
-             new Set(
-               messages
--                .filter((message) => message.type === "compaction" || message.type === "model-switched")
-+                .filter(
-+                  (message) =>
-+                    message.type === "compaction" ||
-+                    message.type === "model-switched" ||
+@@ -280,7 +280,9 @@ export namespace Timeline {
+                   (message) =>
+                     message.type === "compaction" ||
+                     message.type === "model-switched" ||
+-                    message.type === "location-switched",
++                    message.type === "location-switched" ||
 +                    // ocelot: warnings from plugins (e.g. cache misses) stay out of the "Updates" group.
 +                    (message.type === "notice" && message.level === "warning"),
-+                )
+                 )
                  .map((message) => message.id),
              ),
-           )
 diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
-index ce8b9034ce020bfe47a4be11fb53d576e431461d..ee79be41df80594920fb078e0a130592fa853e3e 100644
+index f2d80e94c5f954292aac482bd32b2f56ff170cde..edf42ae0c94725da521edeacf498a354ef6cba84 100644
 --- a/packages/session-ui/src/timeline/session-timeline-row.tsx
 +++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
-@@ -347,6 +347,11 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -367,6 +367,11 @@ export function createSessionTimelineRowRenderer(input: {
            : capitalizeAgent(message.agent),
        }
      if (message.type === "model-switched") return undefined
@@ -47,7 +43,7 @@ index ce8b9034ce020bfe47a4be11fb53d576e431461d..ee79be41df80594920fb078e0a130592
      if (message.type === "skill") return { label: i18n.t("ui.tool.skill"), data: message.name }
      if (message.type === "system") {
        const sources = Array.isArray(message.metadata?.instructionSources)
-@@ -423,6 +428,10 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -443,6 +448,10 @@ export function createSessionTimelineRowRenderer(input: {
        if (value?.status !== "failed") return ""
        return unwrapErrorMessage(value.error.message)
      })
@@ -58,7 +54,7 @@ index ce8b9034ce020bfe47a4be11fb53d576e431461d..ee79be41df80594920fb078e0a130592
      const moved = createMemo(() => {
        const value = message()
        return value?.type === "location-switched" ? value : undefined
-@@ -496,7 +505,11 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -516,7 +525,11 @@ export function createSessionTimelineRowRenderer(input: {
                            component={href() ? "a" : "div"}
                            data-slot="session-timeline-notice"
                            class={`block w-full truncate ${props.grouped ? "py-1" : "pt-3 pb-1"} text-13-regular leading-text-compact text-text-weak ${inset()}`}

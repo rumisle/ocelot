@@ -13,10 +13,10 @@ UnsupportedContentType includes the status and path.
 Ocelot-Patch: server/api-errors
 
 diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
-index a0457753fea9b135a60d6b50872be1a90f70f019..d1472b6e8236ccc65244711d771f885e44ee7ab3 100644
+index e859a2e5e05ac9433a5296268f94b6ab04253d05..3d1471c5b83d0442e280c7464c42f2b89327c132 100644
 --- a/packages/client/src/promise/generated/client.ts
 +++ b/packages/client/src/promise/generated/client.ts
-@@ -2254,7 +2254,7 @@ async function json(response: Response): Promise<unknown> {
+@@ -2281,7 +2281,7 @@ async function json(response: Response): Promise<unknown> {
      try {
        await response.body?.cancel()
      } catch {}
@@ -25,7 +25,7 @@ index a0457753fea9b135a60d6b50872be1a90f70f019..d1472b6e8236ccc65244711d771f885e
    }
    let text: string
    try {
-@@ -2283,6 +2283,16 @@ function declared(body: DeclaredErrorBody) {
+@@ -2310,6 +2310,16 @@ function declared(body: DeclaredErrorBody) {
    return error
  }
  

@@ -1,110 +1,22 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: rumisle <why-excuse-quail@duck.com>
 Date: Sun, 27 Sep 2026 03:02:37 +0800
-Subject: core/session: say why the provider's safety filter stopped a response
+Subject: core/session: say why the provider's safety filter stopped a
+ response, with advice
 
-A refusal showed only "Provider blocked the response". Anthropic sends the reason with it:
-stop_details { type: "refusal", category, explanation } on the message_delta (category and
-explanation may be null). The Anthropic parser now keeps stop_details on the finish's provider
-metadata, and the error reads e.g.
+Upstream carries a refusal's category and explanation on the finish reason and
+names them. This words it for the user and says what to do, also for a blocked
+compaction summary, and falls back to provider metadata (stopDetails, refusal)
+for providers that only put it there:
 
   The provider's safety filter stopped the response (category: cyber): This request was
   declined because it could enable cyber harm. Retrying the same conversation is usually
   stopped again: edit or rephrase your last message, or switch model.
 
-or "It gave no reason." when there are no details (OpenAI, Gemini). Compaction summaries get
-the same message.
-
 Ocelot-Patch: core/refusal-reason
 
-diff --git a/packages/ai/src/protocols/anthropic-messages.ts b/packages/ai/src/protocols/anthropic-messages.ts
-index 33805d8e2831b35676941e29b3b437e49df6eb8a..9c0a002a5ce1bf895a5d9f2e49ffda06ae78e4c7 100644
---- a/packages/ai/src/protocols/anthropic-messages.ts
-+++ b/packages/ai/src/protocols/anthropic-messages.ts
-@@ -450,6 +450,14 @@ const AnthropicStreamDelta = Schema.Struct({
-   signature: Schema.optional(Schema.String),
-   stop_reason: optionalNull(Schema.String),
-   stop_sequence: optionalNull(Schema.String),
-+  // ocelot: why a refusal happened ({ type: "refusal", category, explanation }).
-+  stop_details: optionalNull(
-+    Schema.Struct({
-+      type: Schema.optional(Schema.String),
-+      category: optionalNull(Schema.String),
-+      explanation: optionalNull(Schema.String),
-+    }),
-+  ),
- })
- type AnthropicStreamDelta = Schema.Schema.Type<typeof AnthropicStreamDelta>
- const decodeAnthropicStreamDelta = Schema.decodeUnknownOption(AnthropicStreamDelta)
-@@ -1428,10 +1436,16 @@ const onMessageDelta = (
-     if (stopReason === null || stopReason === undefined) return state.pendingFinish
- 
-     const stopSequence = event.delta?.stop_sequence
-+    // ocelot: keep stop_details, so a refusal can say why (category, explanation).
-+    const stopDetails = event.delta?.stop_details ?? undefined
-+    const metadata = {
-+      ...(stopSequence === null || stopSequence === undefined ? {} : { stopSequence }),
-+      ...(stopDetails ? { stopDetails } : {}),
-+    }
-     const finishMetadata =
--      stopSequence === null || stopSequence === undefined
-+      Object.keys(metadata).length === 0
-         ? state.pendingFinish?.providerMetadata
--        : providerMetadata(state.providerMetadataKey, { stopSequence })
-+        : providerMetadata(state.providerMetadataKey, metadata)
-     return {
-       reason: {
-         normalized: mapFinishReason(stopReason),
-diff --git a/packages/ai/test/provider/anthropic-messages.test.ts b/packages/ai/test/provider/anthropic-messages.test.ts
-index 173a8c7b8f98b3782a712745dd1650a3074e6de3..6777e06534cb4307a9ee70194a6ae21dc4751ec2 100644
---- a/packages/ai/test/provider/anthropic-messages.test.ts
-+++ b/packages/ai/test/provider/anthropic-messages.test.ts
-@@ -1150,6 +1150,43 @@ describe("Anthropic Messages route", () => {
-     }),
-   )
- 
-+  // ocelot: a refusal keeps stop_details so the session can say why.
-+  it.effect("keeps refusal stop_details on the finish", () =>
-+    Effect.gen(function* () {
-+      const body = sseEvents(
-+        { type: "message_start", message: { usage: { input_tokens: 5 } } },
-+        {
-+          type: "message_delta",
-+          delta: {
-+            stop_reason: "refusal",
-+            stop_sequence: null,
-+            stop_details: {
-+              type: "refusal",
-+              category: "cyber",
-+              explanation: "This request was declined because it could enable cyber harm.",
-+            },
-+          },
-+          usage: { output_tokens: 0 },
-+        },
-+        { type: "message_stop" },
-+      )
-+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
-+      const stopDetails = {
-+        type: "refusal",
-+        category: "cyber",
-+        explanation: "This request was declined because it could enable cyber harm.",
-+      }
-+      expect(response.events.at(-1)).toMatchObject({
-+        type: "finish",
-+        reason: { normalized: "content-filter", raw: "refusal" },
-+        providerMetadata: { anthropic: { stopDetails } },
-+      })
-+      expect(response.events.find((event) => event.type === "step-finish")).toMatchObject({
-+        providerMetadata: { anthropic: { stopDetails } },
-+      })
-+    }),
-+  )
-+
-   it.effect("preserves terminal state across usage-only message deltas", () =>
-     Effect.gen(function* () {
-       const response = yield* LLMClient.generate(request).pipe(
 diff --git a/packages/core/src/session/compaction.ts b/packages/core/src/session/compaction.ts
-index 5de1ef8dc1b4d8725683de2fe8674f942303c0c8..baa80a857fbefa912c0ef54437b05cecb93b9c9c 100644
+index 5de1ef8dc1b4d8725683de2fe8674f942303c0c8..457572af7fc083ebde0694b6b583007fb4d328ea 100644
 --- a/packages/core/src/session/compaction.ts
 +++ b/packages/core/src/session/compaction.ts
 @@ -34,6 +34,7 @@ import { SessionRunnerRetry } from "./runner/retry.js"
@@ -120,38 +32,44 @@ index 5de1ef8dc1b4d8725683de2fe8674f942303c0c8..baa80a857fbefa912c0ef54437b05cec
                  return unusable({
                    type: "provider.content-filter",
 -                  message: "Compaction summary was blocked by the provider",
-+                  message: SessionRefusal.message(event.providerMetadata, "the compaction summary"),
++                  message: SessionRefusal.message(event, "the compaction summary"),
                  })
                default:
                  return Effect.succeed(streamed)
 diff --git a/packages/core/src/session/refusal.ts b/packages/core/src/session/refusal.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9be37d8bb53dd4e1279c14472d882bc10563b02e
+index 0000000000000000000000000000000000000000..b184b1d66da07c0bf0525359f63feeb809b9063d
 --- /dev/null
 +++ b/packages/core/src/session/refusal.ts
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,26 @@
 +export * as SessionRefusal from "./refusal.js"
 +
 +import type { ProviderMetadata } from "@opencode/ai"
 +
 +/**
-+ * ocelot: the message for a response the provider's safety filter stopped. Anthropic says why
-+ * in stop_details ({ category, explanation }, both may be null); upstream showed only
-+ * "Provider blocked the response".
++ * ocelot: the message for a response the provider's safety filter stopped, with advice. The finish
++ * reason carries Anthropic's category and explanation (upstream); other providers may only put them
++ * in provider metadata (stopDetails, refusal).
 + */
-+export const message = (metadata: ProviderMetadata | undefined, subject = "the response") => {
-+  const details = Object.values(metadata ?? {})
++export const message = (
++  event: {
++    readonly reason?: { readonly category?: string; readonly explanation?: string }
++    readonly providerMetadata?: ProviderMetadata
++  },
++  subject = "the response",
++) => {
++  const details = Object.values(event.providerMetadata ?? {})
 +    .map((value) => value?.stopDetails ?? value?.refusal)
 +    .find((value): value is { category?: unknown; explanation?: unknown } => !!value && typeof value === "object")
-+  const category = typeof details?.category === "string" && details.category ? details.category : undefined
-+  const explanation =
-+    typeof details?.explanation === "string" && details.explanation.trim() ? details.explanation.trim() : undefined
++  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined)
++  const category = text(event.reason?.category) ?? text(details?.category)
++  const explanation = text(event.reason?.explanation) ?? text(details?.explanation)
 +  const head = `The provider's safety filter stopped ${subject}${category ? ` (category: ${category})` : ""}`
 +  const why = explanation ? `: ${explanation.replace(/\.?$/, ".")}` : ". It gave no reason."
 +  return `${head}${why} Retrying the same conversation is usually stopped again: edit or rephrase your last message, or switch model.`
 +}
 diff --git a/packages/core/src/session/runner/publish-llm-event.ts b/packages/core/src/session/runner/publish-llm-event.ts
-index cf970bd4bfb007338af12d3e63e23fcab0feb5fb..79e031e5c769a9e3bab8d0cd8ece00c48e2bd349 100644
+index 4b7d4c1078f2c5139be0ca4a78fb20dc1980accf..b811ac7cd07445875b8ceac02ffe5ade0cb8a96c 100644
 --- a/packages/core/src/session/runner/publish-llm-event.ts
 +++ b/packages/core/src/session/runner/publish-llm-event.ts
 @@ -12,6 +12,7 @@ import { SessionSchema } from "../schema.js"
@@ -162,17 +80,25 @@ index cf970bd4bfb007338af12d3e63e23fcab0feb5fb..79e031e5c769a9e3bab8d0cd8ece00c4
  import type { Tool } from "../../tool.js"
  
  type Input = {
-@@ -551,7 +552,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
+@@ -551,15 +552,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
          }
          if (event.reason.normalized === "content-filter") {
            providerFailed = true
--          yield* failAssistant({ type: "provider.content-filter", message: "Provider blocked the response" })
-+          yield* failAssistant({ type: "provider.content-filter", message: SessionRefusal.message(event.providerMetadata) })
+-          yield* failAssistant({
+-            type: "provider.content-filter",
+-            message: [
+-              `Provider blocked the response${event.reason.category === undefined ? "" : ` (${event.reason.category})`}`,
+-              event.reason.explanation,
+-            ]
+-              .filter(Boolean)
+-              .join(": "),
+-          })
++          yield* failAssistant({ type: "provider.content-filter", message: SessionRefusal.message(event) })
            return
          }
          return
 diff --git a/packages/core/test/session-runner-tool-events.test.ts b/packages/core/test/session-runner-tool-events.test.ts
-index 2c09ea71f5f21ad8a8696455db29b9ed9073da81..494fd53d5e0811a94a6307844d2a92ceec11a21e 100644
+index ccc8aa9a5257038e2e2c14d444800935219bd6f3..fdc50c9a57bd505aafb0528d539935b05edd13ef 100644
 --- a/packages/core/test/session-runner-tool-events.test.ts
 +++ b/packages/core/test/session-runner-tool-events.test.ts
 @@ -632,7 +632,11 @@ test("content-filter finish retains failure evidence until step closeout", async
@@ -188,11 +114,22 @@ index 2c09ea71f5f21ad8a8696455db29b9ed9073da81..494fd53d5e0811a94a6307844d2a92ce
      finish: "content-filter",
      rawFinish: "refusal",
      providerState: {
+@@ -689,7 +693,9 @@ test("content-filter failure explains the refusal when the provider gives a reas
+   expect(published.at(-1)?.data).toMatchObject({
+     error: {
+       type: "provider.content-filter",
+-      message: "Provider blocked the response (cyber): This request was declined because it could enable cyber harm.",
++      // ocelot: SessionRefusal's wording, with advice.
++      message:
++        "The provider's safety filter stopped the response (category: cyber): This request was declined because it could enable cyber harm. Retrying the same conversation is usually stopped again: edit or rephrase your last message, or switch model.",
+     },
+   })
+ })
 diff --git a/packages/core/test/session-runner.test.ts b/packages/core/test/session-runner.test.ts
-index 5023d5c397e8551994f8ce4b99d277528bcf185a..5a46ab07f7a6342af96c4ef1aac851569802ddc9 100644
+index ce6058c372049fd0b59e6e3cd8e11fbcf6ce5afc..0a8142705e2b7a763c8eb50a6f3220f53d1be3e0 100644
 --- a/packages/core/test/session-runner.test.ts
 +++ b/packages/core/test/session-runner.test.ts
-@@ -5275,7 +5275,10 @@ describe("SessionRunnerLLM", () => {
+@@ -5278,7 +5278,10 @@ describe("SessionRunnerLLM", () => {
        ),
      )
  
@@ -204,7 +141,7 @@ index 5023d5c397e8551994f8ce4b99d277528bcf185a..5a46ab07f7a6342af96c4ef1aac85156
      expect(yield* s.context).toMatchObject([
        { type: "user" },
        {
-@@ -5312,7 +5315,7 @@ describe("SessionRunnerLLM", () => {
+@@ -5315,7 +5318,7 @@ describe("SessionRunnerLLM", () => {
      const run = yield* s.resume.pipe(Effect.forkChild)
      yield* tools.started
      yield* tools.release

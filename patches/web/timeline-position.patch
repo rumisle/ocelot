@@ -13,10 +13,10 @@ offset. In-app session switches keep their live views as before.
 Ocelot-Patch: web/timeline-position
 
 diff --git a/packages/app/src/session/screen.tsx b/packages/app/src/session/screen.tsx
-index 05d35f9db278733373c3a9bb44ddabac8aa54c0e..bc7dbe06eb5849da2cd53534b44d39cc628ab7c2 100644
+index 5d2a1d3ef6efe385a0f945a70c6804c739dd48aa..01d28051f9363802f131ae940fec51611e7335d5 100644
 --- a/packages/app/src/session/screen.tsx
 +++ b/packages/app/src/session/screen.tsx
-@@ -278,6 +278,7 @@ function SessionScreenContent(props: { session: SessionModel; browser: ReturnTyp
+@@ -204,6 +204,7 @@ function SessionScreenContent(props: {
          anchor={timeline.view.anchor}
          setRevealMessage={timeline.view.setRevealMessage}
          setScrollToEnd={timeline.view.setScrollToEnd}
@@ -145,10 +145,10 @@ index 62799a7b800541f5e84d10cbfd2b8788f22b8b2b..15bf2dd7a5d8cc311e3f01d592a5fbba
  const restDelay = 200
  
 diff --git a/packages/app/src/session/timeline/message-timeline.tsx b/packages/app/src/session/timeline/message-timeline.tsx
-index 25c5bc63d962d8e652ef7d627398464ac86c0168..de07be6fb39c98d0d4cca8c15d1c8e4d0f17ca97 100644
+index c37a68d57d0d6ff24465add9fbda7f7aa8b8eaf3..37b6780481bab413ffe3e518bb9349db2a357c96 100644
 --- a/packages/app/src/session/timeline/message-timeline.tsx
 +++ b/packages/app/src/session/timeline/message-timeline.tsx
-@@ -95,6 +95,7 @@ type MessageTimelineProps = {
+@@ -76,6 +76,7 @@ type MessageTimelineProps = {
    anchor: (id: string) => string
    setRevealMessage?: (fn: (id: string, partID?: string) => void) => void
    setScrollToEnd?: (fn: () => void) => void
@@ -156,7 +156,7 @@ index 25c5bc63d962d8e652ef7d627398464ac86c0168..de07be6fb39c98d0d4cca8c15d1c8e4d
    search?: JSX.Element
  }
  
-@@ -224,6 +225,7 @@ function MessageTimelineView(
+@@ -192,6 +193,7 @@ function MessageTimelineView(
      },
      setRevealMessage: props.setRevealMessage,
      setScrollToEnd: props.setScrollToEnd,

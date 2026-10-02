@@ -18,7 +18,7 @@ export PATH="$(dirname "$BUN"):$PATH"
 
 script() {
   case "$1" in
-    core | cli) echo "test" ;;
+    core | cli | session-ui) echo "test" ;;
     app) echo "test:unit" ;;
     *) echo "" ;;
   esac
@@ -35,7 +35,7 @@ if [ $# -ge 2 ] && [ -d "$SRC/packages/$1" ] && [ ! -d "$SRC/packages/$2" ]; the
 fi
 
 packages=("$@")
-[ ${#packages[@]} -gt 0 ] || packages=(core server client cli app)
+[ ${#packages[@]} -gt 0 ] || packages=(core server client cli app gui-extensions session-ui)
 status=0
 for pkg in "${packages[@]}"; do
   log "$pkg"

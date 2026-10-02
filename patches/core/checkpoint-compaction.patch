@@ -29,10 +29,10 @@ where it starts.
 Ocelot-Patch: core/checkpoint-compaction
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index e05af09eb627166cc35e9c4023fc9a9803ba74e6..ce8435a911969e2a57e6cc423a0deeab00a6d485 100644
+index 9cbb806d3fd51fa4a03c386886d29f758a9fcb6c..723880a08494685fc6236773daf43fd19518c1ba 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
-@@ -1294,6 +1294,7 @@ export type SessionLogOutput =
+@@ -1314,6 +1314,7 @@ export type SessionLogOutput =
                | undefined
              readonly text: string
              readonly recent: string
@@ -41,10 +41,10 @@ index e05af09eb627166cc35e9c4023fc9a9803ba74e6..ce8435a911969e2a57e6cc423a0deeab
              readonly tokens?:
                | {
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index d269c89d834a0f6a84bde3811cc4207b3d189576..38599b1fb93d588934a3218b2bb7d936f63477d6 100644
+index a7b3e7209e521d906ca50f643fa7a215e4e9802c..eb19b97313f422f92f98ba0ebf300ed89db05ee8 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
-@@ -1819,6 +1819,7 @@ export type SessionMessageCompactionCompleted = {
+@@ -1838,6 +1838,7 @@ export type SessionMessageCompactionCompleted = {
    summary: string
    recent: string
    providerContext?: SessionProviderContext
@@ -52,7 +52,7 @@ index d269c89d834a0f6a84bde3811cc4207b3d189576..38599b1fb93d588934a3218b2bb7d936
    cost?: MoneyUSD
    tokens?: TokenUsageInfo
  }
-@@ -1838,6 +1839,7 @@ export type SessionCompactionEnded = {
+@@ -1857,6 +1858,7 @@ export type SessionCompactionEnded = {
      providerContext?: SessionProviderContext
      text: string
      recent: string
@@ -60,7 +60,7 @@ index d269c89d834a0f6a84bde3811cc4207b3d189576..38599b1fb93d588934a3218b2bb7d936
      cost?: MoneyUSD
      tokens?: TokenUsageInfo
    }
-@@ -2126,7 +2128,14 @@ export type ConfigEntry =
+@@ -2157,7 +2159,14 @@ export type ConfigEntry =
                  }
            }
          }
@@ -76,7 +76,7 @@ index d269c89d834a0f6a84bde3811cc4207b3d189576..38599b1fb93d588934a3218b2bb7d936
          skills?: Array<string>
          commands?: {
            [x: string]: {
-@@ -3322,6 +3331,7 @@ export type SessionImportInput = {
+@@ -3378,6 +3387,7 @@ export type SessionImportInput = {
                  }
                  readonly messages: JsonValue
                }
@@ -84,7 +84,7 @@ index d269c89d834a0f6a84bde3811cc4207b3d189576..38599b1fb93d588934a3218b2bb7d936
                readonly cost?: number
                readonly tokens?: {
                  readonly input: number
-@@ -3653,6 +3663,7 @@ export type SessionImportInput = {
+@@ -3729,6 +3739,7 @@ export type SessionImportInput = {
                  }
                  readonly messages: JsonValue
                }
@@ -92,7 +92,7 @@ index d269c89d834a0f6a84bde3811cc4207b3d189576..38599b1fb93d588934a3218b2bb7d936
                readonly cost?: number
                readonly tokens?: {
                  readonly input: number
-@@ -3984,6 +3995,7 @@ export type SessionImportInput = {
+@@ -4080,6 +4091,7 @@ export type SessionImportInput = {
                  }
                  readonly messages: JsonValue
                }
@@ -137,7 +137,7 @@ index 7080d88836c54597c11aa2fd36fa1bd28eb96cee..050f9e38520836197f50bd6cdecd3152
        }
      })
 diff --git a/packages/core/src/session/compaction.ts b/packages/core/src/session/compaction.ts
-index baa80a857fbefa912c0ef54437b05cecb93b9c9c..4703df0c29ad6d855606b95ef140d0d3e62a5b54 100644
+index 457572af7fc083ebde0694b6b583007fb4d328ea..3e9eb966a11abdd958c8c748fdbf734c74b0bc20 100644
 --- a/packages/core/src/session/compaction.ts
 +++ b/packages/core/src/session/compaction.ts
 @@ -11,6 +11,7 @@ import {
@@ -681,10 +681,10 @@ index d60e9d135d499e23f89b644499592405b702feac..c23107bb63afd9300f1eb0f9be6d29ab
          Message.make({
            id: message.id,
 diff --git a/packages/core/test/config/normalization.test.ts b/packages/core/test/config/normalization.test.ts
-index 28702520f2483cc0e9597e052c3b391fcee3c123..b8b41072bb15a2a1a9401e4d3719eb131d82385e 100644
+index d8ee670b7cb073da5f116435e3579fc7f0a5eb9b..855a72dff4d40430a4b765e3d489f44be2d384c3 100644
 --- a/packages/core/test/config/normalization.test.ts
 +++ b/packages/core/test/config/normalization.test.ts
-@@ -387,6 +387,24 @@ describe("ConfigNormalize", () => {
+@@ -399,6 +399,24 @@ describe("ConfigNormalize", () => {
      ])
    })
  

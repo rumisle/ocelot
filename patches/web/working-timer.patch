@@ -18,10 +18,10 @@ showed when nothing else looked busy, so it kept appearing and disappearing.
 Ocelot-Patch: web/working-timer
 
 diff --git a/packages/app/src/composer/adapter.ts b/packages/app/src/composer/adapter.ts
-index cadfcf0462b2ddfab6a5b58c8d98780fe7e89bc4..a6481b8a9dc54a204427d48024f2a1f30b676910 100644
+index 4465136d657efb46443336bb74687e1747286b33..84ba428084c32ee83b3c0a8552d01b747b08892f 100644
 --- a/packages/app/src/composer/adapter.ts
 +++ b/packages/app/src/composer/adapter.ts
-@@ -89,6 +89,8 @@ type ComposerAdapterBase = {
+@@ -77,6 +77,8 @@ type ComposerAdapterBase = {
    ready: Accessor<boolean>
    controls: Accessor<ComposerControls>
    working: Accessor<boolean>
@@ -31,7 +31,7 @@ index cadfcf0462b2ddfab6a5b58c8d98780fe7e89bc4..a6481b8a9dc54a204427d48024f2a1f3
  }
  
 diff --git a/packages/app/src/composer/editor/editor.tsx b/packages/app/src/composer/editor/editor.tsx
-index 930a07fe25bd343650d89afcb2c8727b64b32a06..83a457314d8cd4f78b06a27dcda96eca12b3d662 100644
+index fa32bb36556c24f8da0602bb5a8e15ac7602c554..ef3b77dd1b99cdcee1ea19f6d2be01f65e138f59 100644
 --- a/packages/app/src/composer/editor/editor.tsx
 +++ b/packages/app/src/composer/editor/editor.tsx
 @@ -1,4 +1,14 @@
@@ -58,7 +58,7 @@ index 930a07fe25bd343650d89afcb2c8727b64b32a06..83a457314d8cd4f78b06a27dcda96eca
              <Show when={state.mode === "normal"}>
                <ComposerEditorAlternateDelivery
                  controller={props.controller}
-@@ -900,6 +911,40 @@ function ComposerEditorAlternateDelivery(props: { controller: ComposerEditorMode
+@@ -903,6 +914,40 @@ function ComposerEditorAlternateDelivery(props: { controller: ComposerEditorMode
    )
  }
  
@@ -125,19 +125,19 @@ index 4416708189631dd31a7d78e19a17dbfbce74867b..051f6faa3297524ffdecfd9ace254b5d
      }
      setState(reconcile(result.state))
 diff --git a/packages/app/src/composer/model.ts b/packages/app/src/composer/model.ts
-index 30979df177ede37116949df1603362b30c2c3a1c..54c5014f4a970627b6c41b950b73e19c63698560 100644
+index 482a6889ffdc6ff4dd409815835cc436dffc568f..42817390bdf710f7e6a82f31dbd90d04ec9b4a70 100644
 --- a/packages/app/src/composer/model.ts
 +++ b/packages/app/src/composer/model.ts
-@@ -1,7 +1,7 @@
- import { ImagePreview } from "@opencode/ui/image-preview"
+@@ -2,7 +2,7 @@ import { ImagePreview } from "@opencode/ui/image-preview"
  import { useDialog } from "@opencode/ui/context/dialog"
  import type { ReferenceInfo } from "@opencode/client/promise"
+ import type { Links, SessionView } from "@opencode/gui-extensions/sdk"
 -import { createComponent, createEffect, createMemo, on } from "solid-js"
 +import { createComponent, createEffect, createMemo, createSignal, on } from "solid-js"
  import type { ComposerSuggestion } from "./types"
  import { createComposerEditor, createComposerEditorState, type ComposerEditorModel } from "./editor/interaction"
  import { selectionFromLines, type SelectedLineRange, useFile } from "@/workspaces/files/model"
-@@ -87,6 +87,11 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
+@@ -78,6 +78,11 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
      return text.trim().length === 0 && attachments().length === 0 && commentCount() === 0
    })
    const stopping = createMemo(() => adapter.working() && blank())
@@ -146,10 +146,10 @@ index 30979df177ede37116949df1603362b30c2c3a1c..54c5014f4a970627b6c41b950b73e19c
 +  createEffect(
 +    on(adapter.working, (working) => setSince(working ? (adapter.workingSince?.() ?? Date.now()) : undefined)),
 +  )
-   const placeholder = () =>
-     composerPlaceholder(
-       mode(),
-@@ -367,6 +372,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
+   const placeholder = () => {
+     if (mode() === "shell") return language.t("prompt.placeholder.shell", { example: "git status" })
+     if (adapter.working() || (options?.queue?.count() ?? 0) > 0)
+@@ -366,6 +371,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
          available,
          stopping,
          working: adapter.working,
@@ -172,18 +172,18 @@ index 98ae8bea87d0792ffef1423c9d6a2bbd17e822d0..3bf6c488d5bc81da3fdc5c614d950390
      setEditor: input.setEditor,
      session: () => ({
 diff --git a/packages/app/src/session/timeline/message-timeline.tsx b/packages/app/src/session/timeline/message-timeline.tsx
-index 321b4c515fe21395846da0a4bb7e529605507490..25c5bc63d962d8e652ef7d627398464ac86c0168 100644
+index b910b1f717d2064988b14e42ae716649d751d16f..c37a68d57d0d6ff24465add9fbda7f7aa8b8eaf3 100644
 --- a/packages/app/src/session/timeline/message-timeline.tsx
 +++ b/packages/app/src/session/timeline/message-timeline.tsx
-@@ -19,7 +19,6 @@ import { IconButton } from "@opencode/ui/icon-button"
+@@ -8,7 +8,6 @@ import { IconButton } from "@opencode/ui/icon-button"
  import { InlineInput } from "@opencode/ui/inline-input"
  import { Keybind } from "@opencode/ui/keybind"
  import { Menu } from "@opencode/ui/menu"
 -import { TextShimmer } from "@opencode/ui/text-shimmer"
- import { SummaryPopover } from "../summary/popover"
- import { SessionContextUsage } from "@/session/timeline/session-context-usage"
+ import type { BackgroundTask, SessionView } from "@opencode/gui-extensions/sdk"
+ import { ExtensionSlot } from "@/runtime/extension/render"
  import { useLanguage } from "@/runtime/i18n/language"
-@@ -315,53 +314,12 @@ function MessageTimelineView(
+@@ -282,53 +281,12 @@ function MessageTimelineView(
      sessionID,
      1000,
    )
@@ -239,7 +239,7 @@ index 321b4c515fe21395846da0a4bb7e529605507490..25c5bc63d962d8e652ef7d627398464a
            <div
              classList={{
                "min-w-0 w-full max-w-full": true,
-@@ -371,11 +329,6 @@ function MessageTimelineView(
+@@ -338,11 +296,6 @@ function MessageTimelineView(
              <div
                class={`flex h-9 items-center gap-2 pt-3 text-[13px] font-[530] leading-text-compact ${turnPadding()}`}
              >

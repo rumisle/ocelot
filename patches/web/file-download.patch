@@ -1,32 +1,20 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: rumisle <why-excuse-quail@duck.com>
 Date: Wed, 30 Sep 2026 17:09:21 +0800
-Subject: app/files: download button in the file view
+Subject: gui-extensions/file: download button in the file view
 
 The web app could show a file but not save it. Media, documents and other artifacts get
 "Download" in their toolbar; plain text files a download icon in the top corner. It reads the
-file again through the API (the loaded copy is decoded text, or empty for large and unknown
-binaries), so it works for any server, not only the one serving the app.
+file again through the session's server (the loaded copy is decoded text, or empty for large and
+unknown binaries), so it works for any server, not only the one serving the app.
 
 Ocelot-Patch: web/file-download
 
-diff --git a/packages/app/src/runtime/i18n/en.ts b/packages/app/src/runtime/i18n/en.ts
-index 0c44e05dad1dfd9495fa97b129d5f86aa0ef6326..1dc5924d7e74a651874f1f155e6c921ed1258751 100644
---- a/packages/app/src/runtime/i18n/en.ts
-+++ b/packages/app/src/runtime/i18n/en.ts
-@@ -707,6 +707,7 @@ export const dict = {
-   "file.view.preview": "Preview",
-   "file.view.source": "Source",
-   "file.view.openInBrowser": "Open in browser",
-+  "file.view.download": "Download",
-   "file.view.binary": "Binary file · {{size}}",
-   "file.view.table.rows.one": "{{count}} row",
-   "file.view.table.rows.other": "{{count}} rows",
-diff --git a/packages/app/src/session/files/artifact-view.tsx b/packages/app/src/session/files/artifact-view.tsx
-index 7ce61bdf4a9a6d052b4a4cc3630092a4ace1fbb4..cf594e07fd5ff8bc47d3d0c67060234c8a34a5fa 100644
---- a/packages/app/src/session/files/artifact-view.tsx
-+++ b/packages/app/src/session/files/artifact-view.tsx
-@@ -1,7 +1,10 @@
+diff --git a/packages/gui-extensions/src/file/artifact-view.tsx b/packages/gui-extensions/src/file/artifact-view.tsx
+index 1c96735d31dbe124ad98725c5ee71386b406dde6..795da9dfb3306d4a1af127217a9e1c1c652eb859 100644
+--- a/packages/gui-extensions/src/file/artifact-view.tsx
++++ b/packages/gui-extensions/src/file/artifact-view.tsx
+@@ -1,7 +1,11 @@
 -import { createEffect, createMemo, For, Match, on, onCleanup, Show, Switch, type JSX } from "solid-js"
 +import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch, type JSX } from "solid-js"
  import { createStore } from "solid-js/store"
@@ -34,142 +22,127 @@ index 7ce61bdf4a9a6d052b4a4cc3630092a4ace1fbb4..cf594e07fd5ff8bc47d3d0c67060234c
  import { Button } from "@opencode/ui/button"
 +import { Icon } from "@opencode/ui/icon"
 +import { IconButton } from "@opencode/ui/icon-button"
++import { showToast } from "@opencode/ui/toast"
 +import { Tooltip } from "@opencode/ui/tooltip"
  import { FileIcon } from "@opencode/ui/file-icon"
  import { SegmentedControl, SegmentedControlItem } from "@opencode/ui/segmented-control"
  import { ScrollView } from "@opencode/ui/scroll-view"
-@@ -19,6 +22,7 @@ import {
-   type ArtifactKind,
- } from "@/workspaces/files/artifact"
- import { useArtifactOpener } from "@/session/files/open-artifact"
-+import { useFile } from "@/workspaces/files/model"
- import "./artifact-view.css"
- 
- type ArtifactMode = "preview" | "source"
-@@ -96,9 +100,12 @@ export function ArtifactView(props: { path: string; content: FileContent; cacheK
+@@ -101,9 +105,12 @@ export default function ArtifactView(props: {
          onModeChange={previewable() ? (mode) => setState("mode", mode) : undefined}
          meta={meta()}
          actions={
 -          <Show when={kind() === "html"}>
--            <OpenInBrowserButton path={props.path} />
+-            <OpenInBrowserButton session={props.session} path={props.path} />
 -          </Show>
 +          <>
 +            <Show when={kind() === "html"}>
-+              <OpenInBrowserButton path={props.path} />
++              <OpenInBrowserButton session={props.session} path={props.path} />
 +            </Show>
-+            <DownloadButton path={props.path} />
++            <DownloadButton session={props.session} path={props.path} />
 +          </>
          }
        />
        <Show when={!previewable() || state.mode === "preview"} fallback={props.source}>
-@@ -191,6 +198,37 @@ function ArtifactToolbar(props: {
+@@ -196,6 +203,61 @@ function ArtifactToolbar(props: {
    )
  }
  
-+export function DownloadButton(props: { path: string; iconOnly?: boolean }) {
-+  const language = useLanguage()
-+  const file = useFile()
++// ocelot: save the file. It is read again through the session's server: the loaded content is decoded
++// text, or empty for large and unknown binaries.
++export function DownloadButton(props: { session: SessionView; path: string; iconOnly?: boolean }) {
++  const ctx = useExtension()
 +  const [busy, setBusy] = createSignal(false)
 +  const run = () => {
++    const file = props.session.file
++    const name = getFilename(props.path)
++    const request = file.absolute(props.path)
++      ? { path: name, location: { directory: getDirectory(props.path) } }
++      : { path: props.path, location: { directory: props.session.directory } }
 +    setBusy(true)
-+    void file.download(props.path).finally(() => setBusy(false))
++    void props.session.server.client.file
++      .read(request)
++      .then(
++        (bytes) => {
++          const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "application/octet-stream" }))
++          const anchor = document.createElement("a")
++          anchor.href = url
++          anchor.download = name
++          anchor.click()
++          setTimeout(() => URL.revokeObjectURL(url), 60_000)
++        },
++        (error: unknown) =>
++          showToast({
++            variant: "error",
++            title: ctx.t("view.download.failed", { name }),
++            description: error instanceof Error ? error.message : String(error),
++          }),
++      )
++      .finally(() => setBusy(false))
 +  }
 +  return (
 +    <Show
 +      when={props.iconOnly}
 +      fallback={
 +        <Button size="small" variant="ghost" icon="download" disabled={busy()} onClick={run}>
-+          {language.t("file.view.download")}
++          {ctx.t("view.download")}
 +        </Button>
 +      }
 +    >
-+      <Tooltip value={language.t("file.view.download")} placement="bottom">
++      <Tooltip value={ctx.t("view.download")} placement="bottom">
 +        <IconButton
 +          size="small"
 +          variant="ghost"
 +          icon={<Icon name="download" size="small" />}
 +          disabled={busy()}
 +          onClick={run}
-+          aria-label={language.t("file.view.download")}
++          aria-label={ctx.t("view.download")}
 +        />
 +      </Tooltip>
 +    </Show>
 +  )
 +}
 +
- function OpenInBrowserButton(props: { path: string }) {
-   const language = useLanguage()
-   const artifacts = useArtifactOpener()
-diff --git a/packages/app/src/session/files/file-tabs.tsx b/packages/app/src/session/files/file-tabs.tsx
-index 7b6447d9263edc38329adba6f4fcffc06b37170c..bab16974ea35618ec5ee419a06426394eb609246 100644
---- a/packages/app/src/session/files/file-tabs.tsx
-+++ b/packages/app/src/session/files/file-tabs.tsx
-@@ -13,7 +13,7 @@ import { Tabs } from "@opencode/ui/tabs"
+ function OpenInBrowserButton(props: { session: SessionView; path: string }) {
+   const ctx = useExtension()
+   const shared = useShared()
+diff --git a/packages/gui-extensions/src/file/i18n/en.ts b/packages/gui-extensions/src/file/i18n/en.ts
+index 332114af186902594839168a8c7df037c3e8c55d..114c6cc35f3bec0a0b4ae785b4535ebc3a9254c3 100644
+--- a/packages/gui-extensions/src/file/i18n/en.ts
++++ b/packages/gui-extensions/src/file/i18n/en.ts
+@@ -9,6 +9,8 @@ export default {
+   "view.preview": "Preview",
+   "view.source": "Source",
+   "view.openInBrowser": "Open in browser",
++  "view.download": "Download",
++  "view.download.failed": "Could not download {{name}}",
+   "view.binary": "Binary file · {{size}}",
+   "view.table.rows.one": "{{count}} row",
+   "view.table.rows.other": "{{count}} rows",
+diff --git a/packages/gui-extensions/src/file/view.tsx b/packages/gui-extensions/src/file/view.tsx
+index 41caa87b05e55d8f97303f611b98de1377d7067d..8997c067f7c9a88a61f2bbfa7196de53502361a9 100644
+--- a/packages/gui-extensions/src/file/view.tsx
++++ b/packages/gui-extensions/src/file/view.tsx
+@@ -12,7 +12,7 @@ import { Menu } from "@opencode/ui/menu"
  import { ScrollView } from "@opencode/ui/scroll-view"
- import { selectionFromLines, useFile, type FileSelection, type SelectedLineRange } from "@/workspaces/files/model"
- import { artifactKind } from "@/workspaces/files/artifact"
--import { ArtifactView } from "@/session/files/artifact-view"
-+import { ArtifactView, DownloadButton } from "@/session/files/artifact-view"
- import { useComments } from "@/composer/comments"
- import { useLanguage } from "@/runtime/i18n/language"
- import { useComposerState } from "@/composer/persistence"
-@@ -454,6 +454,13 @@ export function SessionFileView(props: SessionFileViewProps) {
+ import { Layout, useExtension, type LineRange, type SessionView } from "../sdk"
+ import { artifactKind } from "@opencode/util/artifact"
+-import ArtifactView from "./artifact-view"
++import ArtifactView, { DownloadButton } from "./artifact-view"
+ import { useShared } from "./context"
+ import { fileTabPath } from "./path"
  
-   const content = () => (
+@@ -444,6 +444,14 @@ export function SessionFileView(props: { session: SessionView; id: string }) {
+ 
+   return (
      <div class="mt-3 relative h-full min-h-0 flex flex-col">
-+      <Show when={state()?.loaded && !artifact() ? path() : undefined}>
++      {/* ocelot: plain files get a download icon; artifacts have it in their toolbar. */}
++      <Show when={current()?.loaded && !artifact() ? path() : undefined}>
 +        {(value) => (
 +          <div class="absolute top-0 end-3 z-10 rounded-md bg-background-base">
-+            <DownloadButton path={value()} iconOnly />
++            <DownloadButton session={props.session} path={value()} iconOnly />
 +          </div>
 +        )}
 +      </Show>
        <Switch>
-         <Match when={state()?.loaded ? state()?.content : undefined}>
+         <Match when={current()?.loaded ? current()?.content : undefined}>
            {(value) => (
-diff --git a/packages/app/src/workspaces/files/model.tsx b/packages/app/src/workspaces/files/model.tsx
-index 55d7674157164f655c6678e2c567f7aaef8b0b64..034a52df35113d1829bf2ccf69c737bd62b2d23a 100644
---- a/packages/app/src/workspaces/files/model.tsx
-+++ b/packages/app/src/workspaces/files/model.tsx
-@@ -216,6 +216,33 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
-       return promise
-     }
- 
-+    // ocelot: save a file. Read again, since the loaded content is decoded text, or empty for large
-+    // or unknown binaries.
-+    const download = (input: string) => {
-+      const file = path.normalize(input)
-+      if (!file) return Promise.resolve()
-+      const directory = scope()
-+      const request = path.absolute(file)
-+        ? { path: getFilename(file), location: { directory: getDirectory(file) } }
-+        : { path: file, location: { directory } }
-+      return serverSDK.api.file.read(request).then(
-+        (bytes) => {
-+          const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "application/octet-stream" }))
-+          const anchor = document.createElement("a")
-+          anchor.href = url
-+          anchor.download = getFilename(file)
-+          anchor.click()
-+          setTimeout(() => URL.revokeObjectURL(url), 60_000)
-+        },
-+        (error) =>
-+          showToast({
-+            variant: "error",
-+            title: language.t("toast.file.loadFailed.title"),
-+            description: formatServerError(error, language.t, language.t("error.chain.unknown")),
-+          }),
-+      )
-+    }
-+
-     const search = (query: string, dirs: "true" | "false", options?: { limit?: number; signal?: AbortSignal }) =>
-       serverSDK.api.file
-         .find(
-@@ -299,6 +326,7 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
-       get,
-       notFound: (input: string) => store.file[path.normalize(input)]?.notFound ?? false,
-       load,
-+      download,
-       scrollTop,
-       scrollLeft,
-       setScrollTop,

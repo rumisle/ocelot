@@ -5,6 +5,7 @@
 // stats have realistic numbers. The newest user text scripts it:
 //   "LINES n"  → a numbered list of n lines (long output, for scrolling)
 //   "SHELL x"  → calls the shell tool with command x first, then answers
+//   "ECHO x"   → replies x verbatim (markdown, math)
 //   a compaction request (checkpoint or summary prompt) → a filled-in template
 //   anything else → a short paragraph
 // Usage reports the request's size (about 4 characters a token), mostly as cache reads.
@@ -40,6 +41,8 @@ function newestUserText(body: any): { text: string; afterTool: boolean } {
 function reply(text: string) {
   if (text.includes("This is not a new task")) return "## Goal\n- Fake goal.\n\n## Constraints & Preferences\n- (none)\n\n## Progress\n### Done\n- [x] Fake work\n\n## Running\n- (none)\n\n## Key Decisions\n- **Fake**: testing\n\n## Next Steps\n1. Continue\n\n## Open Requests\n- (none)\n\n## Relevant Files\n- (none)\n\n## Critical Context\n- (none)"
   if (text.includes("Summarize only what")) return "## Objective\n- Fake summary."
+  const echo = text.match(/ECHO ([\s\S]+)/)
+  if (echo) return echo[1]!
   const lines = text.match(/LINES (\d+)/)
   if (lines) return Array.from({ length: Number(lines[1]) }, (_, i) => `${i + 1}. Line number ${i + 1} of the list.`).join("\n")
   return "This is a fake reply from the test provider. It streams a few words at a time so the UI can be checked with realistic timings, and it reports cache reads so the turn stats have something to show."

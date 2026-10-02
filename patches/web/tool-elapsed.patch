@@ -127,10 +127,10 @@ index 80bf8ab16c5110aba5a32ab0c7698524a005182f..d4da8ac31e67f43146bc813abc369a8d
                        <Show
                          when={split.href}
 diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
-index c33e862acac09db7dc532688f42bc8d0fb53aec4..c30aded3aaf0aa7737ff06aeeddf8cd49f03cb59 100644
+index 3478069b02864a570475ae18f340c638b9242f68..4d9693b850cdcde4bcd50a4f097ba4f9cb1960c1 100644
 --- a/packages/session-ui/src/message/current-message.tsx
 +++ b/packages/session-ui/src/message/current-message.tsx
-@@ -96,6 +96,7 @@ export function SessionAssistantContent(props: {
+@@ -97,6 +97,7 @@ export function SessionAssistantContent(props: {
              metadata={currentToolMetadata(tool())}
              output={currentToolOutput(tool())}
              status={tool().state.status}
@@ -139,10 +139,10 @@ index c33e862acac09db7dc532688f42bc8d0fb53aec4..c30aded3aaf0aa7737ff06aeeddf8cd4
              defaultOpen={props.defaultOpen}
              open={props.toolOpen}
 diff --git a/packages/session-ui/src/tools/tool-renderer.tsx b/packages/session-ui/src/tools/tool-renderer.tsx
-index be2494089d3f7b14195e32ec15080d4e6ccc7fd4..884964c636ce949ffd543a81a84373c5f27d303b 100644
+index 348fc745f81417d3640de343153f747547b141a3..114d6e072457f7d3df9b8dd4257b818c840f8cbe 100644
 --- a/packages/session-ui/src/tools/tool-renderer.tsx
 +++ b/packages/session-ui/src/tools/tool-renderer.tsx
-@@ -22,6 +22,7 @@ import { type SessionSummary, useData } from "../context"
+@@ -25,6 +25,7 @@ import { type SessionSummary, useData } from "../context"
  import { useFileComponent } from "@opencode/ui/context/file"
  import { type UiI18n, useI18n } from "@opencode/ui/context/i18n"
  import { BasicTool, GenericTool } from "../components/basic-tool"
@@ -150,7 +150,7 @@ index be2494089d3f7b14195e32ec15080d4e6ccc7fd4..884964c636ce949ffd543a81a84373c5
  import { FileIcon } from "@opencode/ui/file-icon"
  import { Icon, type IconProps } from "@opencode/ui/icon"
  import { ToolErrorCard } from "../components/tool-error-card"
-@@ -629,6 +630,7 @@ export function CurrentContextToolGroup(props: {
+@@ -653,6 +654,7 @@ export function CurrentContextToolGroup(props: {
                <Show when={label().after}>
                  {(after) => <span data-slot="context-tool-group-prefix">{after()}</span>}
                </Show>
@@ -158,23 +158,31 @@ index be2494089d3f7b14195e32ec15080d4e6ccc7fd4..884964c636ce949ffd543a81a84373c5
              </span>
            </div>
          }
-@@ -713,6 +715,7 @@ export function CurrentContextToolGroup(props: {
-                                       output={currentToolOutput(tool())}
-                                       error={currentToolError(tool())}
-                                       status={tool().state.status}
-+                                      time={tool().time}
-                                       defaultOpen={props.toolDefaultOpen?.(tool()) ?? false}
-                                       open={props.toolOpen?.(tool().id) ?? props.toolDefaultOpen?.(tool())}
-                                       onOpenChange={(open) => props.onToolOpenChange?.(tool().id, open)}
-@@ -788,6 +791,7 @@ export function CurrentContextToolGroup(props: {
-                                         }
-                                       />
-                                     </span>
-+                                    <ToolElapsed time={tool().time} />
-                                     <Show when={trigger().subtitle}>
-                                       {(subtitle) => <span data-slot="basic-tool-tool-subtitle">{subtitle()}</span>}
-                                     </Show>
-@@ -1185,6 +1189,8 @@ export function ToolDisplay(
+@@ -745,6 +747,7 @@ export function CurrentContextToolGroup(props: {
+                                         output={currentToolOutput(tool())}
+                                         error={currentToolError(tool())}
+                                         status={tool().state.status}
++                                        time={tool().time}
+                                         defaultOpen={props.toolDefaultOpen?.(tool()) ?? false}
+                                         open={props.toolOpen?.(tool().id) ?? props.toolDefaultOpen?.(tool())}
+                                         onOpenChange={(open) => props.onToolOpenChange?.(tool().id, open)}
+@@ -820,6 +823,7 @@ export function CurrentContextToolGroup(props: {
+                                           }
+                                         />
+                                       </span>
++                                      <ToolElapsed time={tool().time} />
+                                       <Show when={trigger().subtitle}>
+                                         {(subtitle) => <span data-slot="basic-tool-tool-subtitle">{subtitle()}</span>}
+                                       </Show>
+@@ -912,6 +916,7 @@ export function CurrentReadToolGroup(props: {
+                 <span data-slot="basic-tool-tool-title">
+                   <TextShimmer text={i18n.t("ui.tool.read")} active={pending()} />
+                 </span>
++                <ToolElapsed time={groupTime(props.tools.map((tool) => tool.time))} />
+                 <span ref={list} data-slot="basic-tool-tool-subtitle">
+                   <Index each={files()}>
+                     {(file, index) => (
+@@ -1306,6 +1311,8 @@ export function ToolDisplay(
    props: ToolProps & {
      id: string
      error?: string
@@ -183,23 +191,23 @@ index be2494089d3f7b14195e32ec15080d4e6ccc7fd4..884964c636ce949ffd543a81a84373c5
    },
  ) {
    const data = useData()
-@@ -1210,6 +1216,7 @@ export function ToolDisplay(
+@@ -1330,6 +1337,7 @@ export function ToolDisplay(
+   const render = createMemo(() => ToolRegistry.render(props.tool) ?? GenericTool)
  
    return (
++    <ToolTimeContext.Provider value={() => props.time}>
      <Show when={!hideQuestion()}>
-+      <ToolTimeContext.Provider value={() => props.time}>
        <div data-component="tool-part-wrapper" data-timeline-part-id={props.id}>
          <Switch>
-           <Match when={error()}>
-@@ -1251,6 +1258,7 @@ export function ToolDisplay(
-           </Match>
+@@ -1373,6 +1381,7 @@ export function ToolDisplay(
          </Switch>
        </div>
-+      </ToolTimeContext.Provider>
      </Show>
++    </ToolTimeContext.Provider>
    )
  }
-@@ -1500,6 +1508,7 @@ ToolRegistry.register({
+ 
+@@ -1618,6 +1627,7 @@ ToolRegistry.register({
                <span data-slot="basic-tool-tool-title">
                  <TextShimmer text={i18n.t("ui.tool.webfetch")} active={pending()} />
                </span>
@@ -207,7 +215,7 @@ index be2494089d3f7b14195e32ec15080d4e6ccc7fd4..884964c636ce949ffd543a81a84373c5
                <Show when={!pending() && url()}>
                  <a
                    data-slot="basic-tool-tool-subtitle"
-@@ -1787,6 +1796,7 @@ ToolRegistry.register({
+@@ -1905,6 +1915,7 @@ ToolRegistry.register({
                <span data-slot="basic-tool-tool-title">
                  <TextShimmer text={i18n.t("ui.tool.execute")} active={pending()} />
                </span>
@@ -215,7 +223,7 @@ index be2494089d3f7b14195e32ec15080d4e6ccc7fd4..884964c636ce949ffd543a81a84373c5
                <Show when={!open() && code()}>
                  <ShellSubmessage text={code().split("\n", 1)[0]} animate={sawPending} />
                </Show>
-@@ -1870,6 +1880,7 @@ ToolRegistry.register({
+@@ -1988,6 +1999,7 @@ ToolRegistry.register({
                <span data-slot="basic-tool-tool-title">
                  <TextShimmer text={i18n.t("ui.tool.shell")} active={pending()} />
                </span>

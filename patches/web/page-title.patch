@@ -13,29 +13,21 @@ back to "OpenCode" when you leave the session.
 Ocelot-Patch: web/page-title
 
 diff --git a/packages/app/src/session/screen.tsx b/packages/app/src/session/screen.tsx
-index a69394ccaac66cddba8fbfeab509437044cbff80..05d35f9db278733373c3a9bb44ddabac8aa54c0e 100644
+index bc5e145331f1ae244da63bc1a55a2fe068c70936..5d2a1d3ef6efe385a0f945a70c6804c739dd48aa 100644
 --- a/packages/app/src/session/screen.tsx
 +++ b/packages/app/src/session/screen.tsx
-@@ -9,6 +9,7 @@ import {
-   createEffect,
-   createComputed,
-   on,
-+  onCleanup,
- } from "solid-js"
- import { createStore } from "solid-js/store"
- import { ResizeHandle } from "@opencode/ui/resize-handle"
-@@ -36,6 +37,7 @@ import { createSessionBrowser } from "./browser/model"
+@@ -25,6 +25,7 @@ import { SessionIdentityHeader } from "./session-identity-header"
+ import { SessionReviewToggle } from "./header/session-header-actions"
+ import { createAnimatedPresence } from "@/runtime/animated-presence"
  import { createTimelineCache } from "./timeline/cache"
- import { ArtifactMarkdownProvider, ArtifactOpenerProvider } from "./files/open-artifact"
- import { createSessionBtw } from "./btw/model"
 +import { sessionTitle } from "./title"
  
- const SessionMobileFiles = lazy(async () => {
-   const { SessionMobileFiles } = await import("./files/session-mobile-files")
-@@ -63,6 +65,14 @@ function SessionScreenContent(props: { session: SessionModel; browser: ReturnTyp
+ export function SessionScreen(props: { session: SessionModel }) {
+   // The timeline cache captures its owner when created, so link handling must be provided above it.
+@@ -44,6 +45,14 @@ function SessionScreenContent(props: {
    const session = props.session
-   const browser = props.browser
-   const server = useServer()
+   const host = useExtensionHost()
+   const attachment = useExtensionAttachment()
 +  // ocelot: the page (browser tab) title is the session's title.
 +  createEffect(() => {
 +    const title = sessionTitle(session.data.info()?.title)
@@ -44,6 +36,6 @@ index a69394ccaac66cddba8fbfeab509437044cbff80..05d35f9db278733373c3a9bb44ddabac
 +  onCleanup(() => {
 +    document.title = "OpenCode"
 +  })
-   const detailsProject = createMemo(() => {
-     const info = session.data.info()
-     return info ? server.ctx.projects.detailsForSession(info) : undefined
+   const isDesktop = session.isDesktop
+   const sidebar = createPanelSidebar()
+   const region = createRegion({ region: "side", view: props.view, tabs: session.layout.tabs })

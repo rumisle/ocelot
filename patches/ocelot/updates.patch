@@ -15,10 +15,10 @@ false) then work as they do in OpenCode.
 Ocelot-Patch: ocelot/updates
 
 diff --git a/packages/cli/src/services/updater.ts b/packages/cli/src/services/updater.ts
-index 20828386c51fba67f4deca4ef80c40ea360fa1ba..7768f6321a4577d28a00a704e8af4138f639d67b 100644
+index daa95bf4dbc2f3603cc64bc047316f5ede8683a0..89cd74a8a47480744c1cdb5f25c77fa5fc6d22a2 100644
 --- a/packages/cli/src/services/updater.ts
 +++ b/packages/cli/src/services/updater.ts
-@@ -10,6 +10,10 @@ import { RetainedImage } from "./retained-image"
+@@ -11,6 +11,10 @@ import { RetainedImage } from "./retained-image"
  import { action, parseReleaseVersion, type Policy } from "./updater-action"
  import { errorMessage } from "../util/error"
  
@@ -29,7 +29,7 @@ index 20828386c51fba67f4deca4ef80c40ea360fa1ba..7768f6321a4577d28a00a704e8af4138
  export const methods = ["curl", "npm", "pnpm", "bun", "yarn", "vp", "brew"] as const
  
  export type Method = (typeof methods)[number]
-@@ -169,13 +173,16 @@ const make = Effect.gen(function* () {
+@@ -171,13 +175,16 @@ const make = Effect.gen(function* () {
  
    const curlBinary = path.resolve(
      global.home,
@@ -48,7 +48,7 @@ index 20828386c51fba67f4deca4ef80c40ea360fa1ba..7768f6321a4577d28a00a704e8af4138
      const executable = yield* fs.realPath(process.execPath).pipe(Effect.orElseSucceed(() => process.execPath))
      if (
        ["opencode-beta", "opencode-v2"].some((name) =>
-@@ -232,55 +239,38 @@ const make = Effect.gen(function* () {
+@@ -234,55 +241,38 @@ const make = Effect.gen(function* () {
      }
    }
  
@@ -127,7 +127,7 @@ index 20828386c51fba67f4deca4ef80c40ea360fa1ba..7768f6321a4577d28a00a704e8af4138
    })
  
    const latest = () =>
-@@ -389,8 +379,8 @@ const make = Effect.gen(function* () {
+@@ -394,8 +384,8 @@ const make = Effect.gen(function* () {
            const installer = path.join(directory, "install")
            yield* runUpgrade({
              method,
@@ -138,7 +138,7 @@ index 20828386c51fba67f4deca4ef80c40ea360fa1ba..7768f6321a4577d28a00a704e8af4138
              title: "Could not download the OpenCode installer",
              retry: "Check your network, then run opencode upgrade again.",
            })
-@@ -399,7 +389,7 @@ const make = Effect.gen(function* () {
+@@ -404,7 +394,7 @@ const make = Effect.gen(function* () {
              runUpgrade({
                method,
                command: ["bash", installer, "--version", version, "--no-modify-path"],

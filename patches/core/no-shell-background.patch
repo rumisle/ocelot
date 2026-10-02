@@ -14,10 +14,10 @@ the completion still arrives as a steer. Off by default (upstream behavior).
 Ocelot-Patch: core/no-shell-background
 
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index dcb84cb5d12ded7be9cb910954a13b5467249968..297283c4af069701120d8ccd35333a292812f99e 100644
+index 86cb5b8ecd83f8c316f1950a538da322999dbb33..ca22ea9c217de6ec5c39f01e4819a4fd287b8915 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
-@@ -2205,6 +2205,7 @@ export type ConfigEntry =
+@@ -2236,6 +2236,7 @@ export type ConfigEntry =
          }
          experimental?: {
            portable_shell_scanner?: boolean

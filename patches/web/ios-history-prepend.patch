@@ -77,10 +77,10 @@ index 30d618f79e652355ec03ee311ce238e71be7c4a8..62799a7b800541f5e84d10cbfd2b8788
 +  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 0
 +}
 diff --git a/packages/app/src/session/timeline/model.ts b/packages/app/src/session/timeline/model.ts
-index 8b3724c246ce53be8c4d96935a1635dc8d37cd5b..ae598010d587ee622267bb2476c9ae15cc04d162 100644
+index db335379b05b24488236a8596bd16877e116f285..496415631d787007f241da86c5957126f47d1112 100644
 --- a/packages/app/src/session/timeline/model.ts
 +++ b/packages/app/src/session/timeline/model.ts
-@@ -45,12 +45,17 @@ export function createTimelineModel(input: { session: Pick<SessionModel, "identi
+@@ -40,12 +40,17 @@ export function createTimelineModel(input: { session: Pick<SessionModel, "identi
      const id = input.session.identity.sessionID()
      return id ? data.session.message.loading(id) : false
    }

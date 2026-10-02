@@ -21,7 +21,7 @@ Client types and openapi.json are regenerated (openapi.json was already stale).
 Ocelot-Patch: core/session-notices
 
 diff --git a/packages/client/src/effect/api/api.ts b/packages/client/src/effect/api/api.ts
-index 9f01b5983f55b2d21c6919251521ba243fee57cd..e3026a8f8a4bcc653973f0e92bf191e7087f79be 100644
+index 90d91d6d77658695b046c064baadc850218e747d..6c54cf0bd44daed6c1358ae6e099f7c74db14273 100644
 --- a/packages/client/src/effect/api/api.ts
 +++ b/packages/client/src/effect/api/api.ts
 @@ -261,6 +261,27 @@ export type SessionUpdateInput = {
@@ -52,7 +52,7 @@ index 9f01b5983f55b2d21c6919251521ba243fee57cd..e3026a8f8a4bcc653973f0e92bf191e7
  export type SessionMoveInput = {
    readonly sessionID: Session.ID
    readonly directory: AbsolutePath
-@@ -773,6 +794,37 @@ export type SessionLogOutput =
+@@ -778,6 +799,37 @@ export type SessionLogOutput =
              readonly metadata?: { readonly [x: string]: unknown } | undefined
            }
          }
@@ -90,7 +90,7 @@ index 9f01b5983f55b2d21c6919251521ba243fee57cd..e3026a8f8a4bcc653973f0e92bf191e7
        | {
            readonly id: Event.ID
            readonly created: number
-@@ -1431,6 +1483,7 @@ export interface SessionApi<E = never> {
+@@ -1460,6 +1512,7 @@ export interface SessionApi<E = never> {
    readonly switchAgent: SessionSwitchAgentOperation<E>
    readonly switchModel: SessionSwitchModelOperation<E>
    readonly update: SessionUpdateOperation<E>
@@ -98,7 +98,7 @@ index 9f01b5983f55b2d21c6919251521ba243fee57cd..e3026a8f8a4bcc653973f0e92bf191e7
    readonly move: SessionMoveOperation<E>
    readonly prompt: SessionPromptOperation<E>
    readonly command: SessionCommandOperation<E>
-@@ -1490,6 +1543,7 @@ export type MessageListInput = {
+@@ -1519,6 +1572,7 @@ export type MessageListInput = {
      | "shell"
      | "assistant"
      | "compaction"
@@ -107,7 +107,7 @@ index 9f01b5983f55b2d21c6919251521ba243fee57cd..e3026a8f8a4bcc653973f0e92bf191e7
  }
  export type MessageListOutput = {
 diff --git a/packages/client/src/effect/generated/client.ts b/packages/client/src/effect/generated/client.ts
-index 3cae408d093e6b0fabbfa329179fb84927f9801b..4ef8d2ea20ad86a30ca4d4289ccc3626b1245743 100644
+index dbbce17dadecb9b6a2084e51b593a2f784a0a2b8..a7a2f142d039e085c3e4281a1f2adcbb36c73da5 100644
 --- a/packages/client/src/effect/generated/client.ts
 +++ b/packages/client/src/effect/generated/client.ts
 @@ -45,6 +45,8 @@ import type {
@@ -119,7 +119,7 @@ index 3cae408d093e6b0fabbfa329179fb84927f9801b..4ef8d2ea20ad86a30ca4d4289ccc3626
    SessionMoveInput,
    SessionMoveOutput,
    SessionPromptInput,
-@@ -476,6 +478,23 @@ const EndpointSessionUpdate = (raw: RawClient["server.session"]) => (input: Sess
+@@ -479,6 +481,23 @@ const EndpointSessionUpdate = (raw: RawClient["server.session"]) => (input: Sess
      }).pipe(Effect.mapError(mapClientError)),
    )
  
@@ -143,7 +143,7 @@ index 3cae408d093e6b0fabbfa329179fb84927f9801b..4ef8d2ea20ad86a30ca4d4289ccc3626
  const EndpointSessionMove = (raw: RawClient["server.session"]) => (input: SessionMoveInput) =>
    preserveEffect<SessionMoveOutput>()(
      raw["session.move"]({
-@@ -769,6 +788,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
+@@ -773,6 +792,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
    switchAgent: EndpointSessionSwitchAgent(raw),
    switchModel: EndpointSessionSwitchModel(raw),
    update: EndpointSessionUpdate(raw),
@@ -152,7 +152,7 @@ index 3cae408d093e6b0fabbfa329179fb84927f9801b..4ef8d2ea20ad86a30ca4d4289ccc3626
    prompt: EndpointSessionPrompt(raw),
    command: EndpointSessionCommand(raw),
 diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
-index a20301d71a6cb59b249b05df360467e29e75a4d1..e9a14453e12816c18af257868d022585dec20307 100644
+index ae1e5aa174acc109e8ef6e0647e8541cf4b9dcf5..6e8f0d922716b0224bffe76e689cf1b7f3463e39 100644
 --- a/packages/client/src/promise/generated/client.ts
 +++ b/packages/client/src/promise/generated/client.ts
 @@ -39,6 +39,8 @@ import type {
@@ -164,7 +164,7 @@ index a20301d71a6cb59b249b05df360467e29e75a4d1..e9a14453e12816c18af257868d022585
    SessionMoveInput,
    SessionMoveOutput,
    SessionPromptInput,
-@@ -693,6 +695,24 @@ export function make(options: ClientOptions) {
+@@ -696,6 +698,24 @@ export function make(options: ClientOptions) {
            },
            requestOptions,
          ),
@@ -190,7 +190,7 @@ index a20301d71a6cb59b249b05df360467e29e75a4d1..e9a14453e12816c18af257868d022585
          request<SessionMoveOutput>(
            {
 diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
-index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb3980d13e4b 100644
+index 53489b9ecf7195fc2f9da9f094ceabc1429842f1..af13fb83299b4e3582c008271188048a420f05be 100644
 --- a/packages/client/src/promise/generated/types.ts
 +++ b/packages/client/src/promise/generated/types.ts
 @@ -163,6 +163,16 @@ export type SessionMessageIdle = {
@@ -210,7 +210,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
  export type SessionActive = { type: "running" }
  
  export type SessionInboxDelivery = "steer" | "queue"
-@@ -704,6 +714,23 @@ export type SessionSynthetic = {
+@@ -715,6 +725,23 @@ export type SessionSynthetic = {
    data: { sessionID: string; text: string; description?: string; metadata?: { [x: string]: any } }
  }
  
@@ -234,7 +234,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
  export type SessionSkillActivated = {
    id: string
    created: number
-@@ -2286,6 +2313,7 @@ export type SessionMessageInfo =
+@@ -2327,6 +2354,7 @@ export type SessionMessageInfo =
    | SessionMessageAssistant
    | SessionMessageCompaction
    | SessionMessageIdle
@@ -242,7 +242,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
  
  export type SessionMessageContentUpdated = {
    id: string
-@@ -2340,6 +2368,7 @@ export type SessionEventDurable =
+@@ -2381,6 +2409,7 @@ export type SessionEventDurable =
    | SessionExecutionInterrupted
    | SessionInstructionsUpdated
    | SessionSynthetic
@@ -250,7 +250,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
    | SessionSkillActivated
    | SessionShellStarted
    | SessionShellEnded
-@@ -2404,6 +2433,7 @@ export type V2Event =
+@@ -2445,6 +2474,7 @@ export type V2Event =
    | SessionExecutionInterrupted
    | SessionInstructionsUpdated
    | SessionSynthetic
@@ -258,7 +258,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
    | SessionSkillActivated
    | SessionShellStarted
    | SessionShellEnded
-@@ -3312,6 +3342,15 @@ export type SessionImportInput = {
+@@ -3373,6 +3403,15 @@ export type SessionImportInput = {
            readonly type: "idle"
            readonly outcome: "succeeded" | "failed" | "interrupted"
          }
@@ -274,7 +274,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
      >
      readonly location?: { readonly directory: string } | null
    }["info"]
-@@ -3634,6 +3673,15 @@ export type SessionImportInput = {
+@@ -3715,6 +3754,15 @@ export type SessionImportInput = {
            readonly type: "idle"
            readonly outcome: "succeeded" | "failed" | "interrupted"
          }
@@ -290,7 +290,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
      >
      readonly location?: { readonly directory: string } | null
    }["messages"]
-@@ -3956,6 +4004,15 @@ export type SessionImportInput = {
+@@ -4057,6 +4105,15 @@ export type SessionImportInput = {
            readonly type: "idle"
            readonly outcome: "succeeded" | "failed" | "interrupted"
          }
@@ -306,7 +306,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
      >
      readonly location?: { readonly directory: string } | null
    }["location"]
-@@ -4031,6 +4088,87 @@ export type SessionUpdateInput = {
+@@ -4132,6 +4189,87 @@ export type SessionUpdateInput = {
  
  export type SessionUpdateOutput = void
  
@@ -394,7 +394,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
  export type SessionMoveInput = {
    readonly sessionID: { readonly sessionID: string }["sessionID"]
    readonly directory: { readonly directory: string; readonly delivery?: ("steer" | "queue") | undefined }["directory"]
-@@ -5439,6 +5577,7 @@ export type MessageListInput = {
+@@ -5541,6 +5679,7 @@ export type MessageListInput = {
        | "shell"
        | "assistant"
        | "compaction"
@@ -402,7 +402,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
        | undefined
    }["limit"]
    readonly order?: {
-@@ -5456,6 +5595,7 @@ export type MessageListInput = {
+@@ -5558,6 +5697,7 @@ export type MessageListInput = {
        | "shell"
        | "assistant"
        | "compaction"
@@ -410,7 +410,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
        | undefined
    }["order"]
    readonly cursor?: {
-@@ -5473,6 +5613,7 @@ export type MessageListInput = {
+@@ -5575,6 +5715,7 @@ export type MessageListInput = {
        | "shell"
        | "assistant"
        | "compaction"
@@ -418,7 +418,7 @@ index cf7e78a10bb21f373ce069f264e33c2a108ac060..36c7334c9074562267e59591747bbb39
        | undefined
    }["cursor"]
    readonly type?: {
-@@ -5490,6 +5631,7 @@ export type MessageListInput = {
+@@ -5592,6 +5733,7 @@ export type MessageListInput = {
        | "shell"
        | "assistant"
        | "compaction"
@@ -458,10 +458,10 @@ index 31257b811a12dbde6361213cd5424ba6797ee37f..f1f6b256d287d8d7a8bfbbced80f4c30
          message.insert(event.data.sessionID, {
            id: messageIDFromEvent(event.id),
 diff --git a/packages/core/src/plugin/host.ts b/packages/core/src/plugin/host.ts
-index dd4bd996e10bffcb7b83328378565dc156164927..f4d4f3d5334e3d9de61e66c3b5bbd26981815fc0 100644
+index 6efe89c2863d5ec0265d60b2049341c3fa73ec46..745e957cc7defd2a515674d8752e972721504fbc 100644
 --- a/packages/core/src/plugin/host.ts
 +++ b/packages/core/src/plugin/host.ts
-@@ -547,6 +547,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
+@@ -560,6 +560,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
        }),
        move: sessions.move,
        synthetic: sessions.synthetic,
@@ -652,10 +652,10 @@ index 0738f438063f6cd0ee038ae7040979ed07be3864..9aab9912e29481709a8feb4487b8e761
        switchAgent,
        switchModel,
 diff --git a/packages/core/test/plugin/host.ts b/packages/core/test/plugin/host.ts
-index eaea2bb5879b3b410043640772e9c506e6e0d4d6..e00549be11ea30131e99e1ac75039eeb013a0962 100644
+index c581da62d1b1c2aafdbf36fe0d6ab3aceeecc791..08b1c5bc51a3e54ab54aaee23c5c5dd4425d301f 100644
 --- a/packages/core/test/plugin/host.ts
 +++ b/packages/core/test/plugin/host.ts
-@@ -173,6 +173,7 @@ export function host(overrides: Overrides = {}): Plugin.Context {
+@@ -176,6 +176,7 @@ export function host(overrides: Overrides = {}): Plugin.Context {
        update: overrides.session?.update ?? (() => Effect.die("unused session.update")),
        move: overrides.session?.move ?? (() => Effect.die("unused session.move")),
        synthetic: overrides.session?.synthetic ?? (() => Effect.die("unused session.synthetic")),
@@ -707,43 +707,43 @@ index 5a2d687d48b4140f01d962bd5fa60594b61d58d6..f419e7f0843cd24b23435e5390efe06f
      Effect.gen(function* () {
        const session = yield* Session.Service
 diff --git a/packages/plugin/src/effect/session.ts b/packages/plugin/src/effect/session.ts
-index bea12a931283459c5c1bfa6163568e830bb4d02d..d20410e302bf47ffd439859406c665fd6387d2ab 100644
+index b9f19a6b7249ea901f093809530b8612eab9d178..789ac12cfdae84035d8e528acfa194cd1e258ec9 100644
 --- a/packages/plugin/src/effect/session.ts
 +++ b/packages/plugin/src/effect/session.ts
-@@ -160,6 +160,7 @@ export type SessionDomain = Pick<
-   | "generate"
+@@ -162,6 +162,7 @@ export type SessionDomain = Pick<
    | "command"
+   | "compact"
    | "synthetic"
 +  | "notice"
    | "interrupt"
    | "update"
    | "move"
 diff --git a/packages/plugin/src/promise/adapter.ts b/packages/plugin/src/promise/adapter.ts
-index 15ccb58a0d0004191a7101a68325e57335ce88b9..b0058036017d7085d1a9f4173815c0bf02aa39bd 100644
+index 473b2260af0e4051f6248e3f766cd1ab043c7f51..4c0f82d9a6360367b45f92ba62be0ccf6d2960c3 100644
 --- a/packages/plugin/src/promise/adapter.ts
 +++ b/packages/plugin/src/promise/adapter.ts
-@@ -586,6 +586,7 @@ export function fromPromise(plugin: Plugin) {
-             generate: adaptApiMethod(SessionEndpoints["session.generate"], host.session.generate),
+@@ -589,6 +589,7 @@ export function fromPromise(plugin: Plugin) {
              command: adaptApiMethod(SessionEndpoints["session.command"], host.session.command),
+             compact: adaptApiMethod(SessionEndpoints["session.compact"], host.session.compact),
              synthetic: adaptApiMethod(SessionEndpoints["session.synthetic"], host.session.synthetic),
 +            notice: adaptApiMethod(SessionEndpoints["session.notice"], host.session.notice),
              interrupt: adaptApiMethod(SessionEndpoints["session.interrupt"], host.session.interrupt),
              update: adaptApiMethod(SessionEndpoints["session.update"], host.session.update),
              move: adaptApiMethod(SessionEndpoints["session.move"], host.session.move),
 diff --git a/packages/plugin/src/promise/session.ts b/packages/plugin/src/promise/session.ts
-index ac3aa3888a5b7d16328f68673136044016a7c15f..885bd5fbc69f8a4b1a3baf74b9d5a048474d7dd5 100644
+index 9794147461d67a5ac7694eb02c309ead5400a0b4..693acc8004db7b049a9e68bf3bea78c254f5e455 100644
 --- a/packages/plugin/src/promise/session.ts
 +++ b/packages/plugin/src/promise/session.ts
-@@ -160,6 +160,7 @@ export type SessionDomain = Pick<
-   | "generate"
+@@ -162,6 +162,7 @@ export type SessionDomain = Pick<
    | "command"
+   | "compact"
    | "synthetic"
 +  | "notice"
    | "interrupt"
    | "update"
    | "move"
 diff --git a/packages/protocol/openapi.json b/packages/protocol/openapi.json
-index 7ca75e0ec9bc8994bf0d8e74d4b684739f63923e..486de02f311812d27f8981892551b1ab489a4f45 100644
+index e4fbd2f5d3c63eb9c793a6f27dff2ea9b0e3c88a..0a53e4572694447c07a1a4bb96eb4c713c435eb5 100644
 --- a/packages/protocol/openapi.json
 +++ b/packages/protocol/openapi.json
 @@ -886,9 +886,19 @@
@@ -957,7 +957,7 @@ index 7ca75e0ec9bc8994bf0d8e74d4b684739f63923e..486de02f311812d27f8981892551b1ab
      "/api/session/{sessionID}/move": {
        "post": {
          "tags": ["session"],
-@@ -4897,7 +5067,8 @@
+@@ -4912,7 +5082,8 @@
                      "skill",
                      "shell",
                      "assistant",
@@ -967,7 +967,7 @@ index 7ca75e0ec9bc8994bf0d8e74d4b684739f63923e..486de02f311812d27f8981892551b1ab
                    ]
                  },
                  {
-@@ -17277,6 +17448,9 @@
+@@ -17295,6 +17466,9 @@
                "created": {
                  "type": "number"
                },
@@ -977,7 +977,7 @@ index 7ca75e0ec9bc8994bf0d8e74d4b684739f63923e..486de02f311812d27f8981892551b1ab
                "streamed": {
                  "type": "number"
                },
-@@ -17702,6 +17876,9 @@
+@@ -17720,6 +17894,9 @@
            },
            {
              "$ref": "#/components/schemas/Session.Message.Idle"
@@ -987,7 +987,7 @@ index 7ca75e0ec9bc8994bf0d8e74d4b684739f63923e..486de02f311812d27f8981892551b1ab
            }
          ]
        },
-@@ -17799,6 +17976,44 @@
+@@ -17817,6 +17994,44 @@
          "required": ["id", "time", "type", "model"],
          "additionalProperties": false
        },
@@ -1053,7 +1053,7 @@ index c744abd880f1d55e3a0b68907b7466d48f1cdfd6..75f564fede0136d97d06b19946ce9008
  
  export const MessageGroup = HttpApiGroup.make("server.message")
 diff --git a/packages/protocol/src/groups/session.ts b/packages/protocol/src/groups/session.ts
-index 9ff2399640ad55228f4784634945ee6e7e1b4b49..1fc15544b53b45672d5adb9e70b996aebdbced03 100644
+index 50d7482817c4dbac27e61ee8a64a7f98a74cef3e..0d9d2dd101fd550940a6471d68069ac00a3387c7 100644
 --- a/packages/protocol/src/groups/session.ts
 +++ b/packages/protocol/src/groups/session.ts
 @@ -380,6 +380,30 @@ export const makeSessionGroup = <
@@ -1165,7 +1165,7 @@ index c83442bc50f3794393a281852229eb5b729c2834..d37cd4a049e139b0f3afa970bb88c517
 +  | Notice
  export type Type = Info["type"]
 diff --git a/packages/server/src/handlers/session.ts b/packages/server/src/handlers/session.ts
-index b53598968ca50aead830211f9e48609f14c38f33..0d7ed39a40a8f098351b75001594b4cf36a613bd 100644
+index de652bfa92d1b8966e9b9439b42cde01c316db1d..5bbd6a863b20488ff39b619f7dc07f9b979d7b1e 100644
 --- a/packages/server/src/handlers/session.ts
 +++ b/packages/server/src/handlers/session.ts
 @@ -394,6 +394,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl

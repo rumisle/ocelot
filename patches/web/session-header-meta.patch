@@ -1,46 +1,61 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: rumisle <why-excuse-quail@duck.com>
 Date: Fri, 2 Oct 2026 21:35:56 +0800
-Subject: app/session: model, cost and context window at a glance
+Subject: gui-extensions/usage: model, cost and context window at a glance
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 Desktop: the session header shows provider · model · effort · cost (the
-composer's current selection; effort hidden at its default) in the turn meta's
-style, left of the context circle. Hovering the circle shows the context %,
-the window as used / max in pi's short form (8.1k / 1.0M) and where automatic
+session's current model; effort hidden at its default) in the turn meta's
+style, left of the context circle. Hovering the circle shows the context %, the
+window as used / max in pi's short form (8.1k / 1.0M) and where automatic
 compaction starts, computed from the same compaction config as core.
 
-Phone: the same circle sits in the Session/Changes/Files/Terminal row; a tap
-opens every figure in a popover with the tooltip's look.
+Phone: the same circle sits in the view switcher row through a new
+"session.mobile.nav" slot; a tap opens every figure in a popover with the
+tooltip's look.
 
 Ocelot-Patch: web/session-header-meta
 
-diff --git a/packages/app/src/session/review/view.tsx b/packages/app/src/session/review/view.tsx
-index e2e81013609579849cd1a6630fea4b7f7b0b7a5f..3553485ef62ee49c0206337e85ede50b4b329925 100644
---- a/packages/app/src/session/review/view.tsx
-+++ b/packages/app/src/session/review/view.tsx
-@@ -1,4 +1,5 @@
- import { SessionReviewEmptyChangesV2 } from "@opencode/session-ui/v2/session-review-empty-changes-v2"
-+import { SessionContextUsage } from "@/session/timeline/session-context-usage"
- import { SessionReviewV2SidebarToggle } from "@opencode/session-ui/v2/session-review-v2"
- import { Select } from "@opencode/ui/select"
- import { Tabs } from "@opencode/ui/tabs"
-@@ -65,6 +66,8 @@ export function SessionMobileViewTabs(props: {
+diff --git a/packages/app/src/runtime/extension/mobile.tsx b/packages/app/src/runtime/extension/mobile.tsx
+index 639c5fc0d64378bafc5f50adf79ebc5e068f4330..2663ac592a729183f06301e29dd2a790793125fa 100644
+--- a/packages/app/src/runtime/extension/mobile.tsx
++++ b/packages/app/src/runtime/extension/mobile.tsx
+@@ -8,6 +8,7 @@ import { DrawerContext, Panel, type PanelSidebar, type PanelTab, type SessionVie
+ import { useLanguage } from "@/runtime/i18n/language"
+ import { useExtensionHost } from "./host"
+ import { MobilePanel, panelKey, type Region, type RegionEntry } from "./panels"
++import { ExtensionSlot } from "./render"
+ 
+ const MobilePanelDrawer = lazy(async () => {
+   const { MobilePanelDrawer } = await import("@/shell/mobile-panel-drawer")
+@@ -92,6 +93,7 @@ export function MobileViewTabs(props: {
            </For>
          </Tabs.List>
        </Tabs>
-+      {/* ocelot: model, cost and context window, opened with a tap. */}
-+      <SessionContextUsage variant="tap" />
++      <ExtensionSlot at="session.mobile.nav" input={{ session: props.session }} />
        <Menu
          appearance="standard"
          modal={false}
-diff --git a/packages/app/src/session/timeline/context-figures.test.ts b/packages/app/src/session/timeline/context-figures.test.ts
+diff --git a/packages/gui-extensions/src/sdk/points.ts b/packages/gui-extensions/src/sdk/points.ts
+index 6426043eb21d351c4cbde9b08ae34c77f7742ba6..1653d502e1b9267e18d08c0be154d23056d53706 100644
+--- a/packages/gui-extensions/src/sdk/points.ts
++++ b/packages/gui-extensions/src/sdk/points.ts
+@@ -262,6 +262,8 @@ export interface SlotMap {
+   /** The timeline title row. Cached timelines stay mounted while hidden; `active` is false then. */
+   readonly "session.header": { readonly session: SessionView; readonly active: boolean }
+   readonly "session.panel.end": { readonly session: SessionView }
++  /** ocelot: the narrow-screen view switcher row, before its menu. Keep it small: an icon button. */
++  readonly "session.mobile.nav": { readonly session: SessionView }
+   readonly "session.panel.sidebar": { readonly session: SessionView }
+ }
+ 
+diff --git a/packages/gui-extensions/src/usage/context-figures.test.ts b/packages/gui-extensions/src/usage/context-figures.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..ea264a5aea921b2a985e65a1f207e782bda21b66
 --- /dev/null
-+++ b/packages/app/src/session/timeline/context-figures.test.ts
++++ b/packages/gui-extensions/src/usage/context-figures.test.ts
 @@ -0,0 +1,47 @@
 +import { describe, expect, test } from "bun:test"
 +import type { ConfigEntry } from "@opencode/client/promise"
@@ -89,11 +104,11 @@ index 0000000000000000000000000000000000000000..ea264a5aea921b2a985e65a1f207e782
 +    expect(compactionThreshold({ context: 1_000_000, input: 272_000 }, [])).toBe(244_800)
 +  })
 +})
-diff --git a/packages/app/src/session/timeline/context-figures.ts b/packages/app/src/session/timeline/context-figures.ts
+diff --git a/packages/gui-extensions/src/usage/context-figures.ts b/packages/gui-extensions/src/usage/context-figures.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..7f05850d28469334ef32e7ccf767f3efb074673c
 --- /dev/null
-+++ b/packages/app/src/session/timeline/context-figures.ts
++++ b/packages/gui-extensions/src/usage/context-figures.ts
 @@ -0,0 +1,53 @@
 +import type { ConfigEntry } from "@opencode/client/promise"
 +
@@ -148,91 +163,95 @@ index 0000000000000000000000000000000000000000..7f05850d28469334ef32e7ccf767f3ef
 +  if (config.strategy !== "checkpoint" || native) return ceiling
 +  return Math.min(ceiling, Math.floor(window * (config.ratio ?? CHECKPOINT_RATIO)), config.max ?? CHECKPOINT_MAX)
 +}
-diff --git a/packages/app/src/session/timeline/message-timeline.tsx b/packages/app/src/session/timeline/message-timeline.tsx
-index de07be6fb39c98d0d4cca8c15d1c8e4d0f17ca97..026242374c5d4862c4b284bc56bb661c31efb379 100644
---- a/packages/app/src/session/timeline/message-timeline.tsx
-+++ b/packages/app/src/session/timeline/message-timeline.tsx
-@@ -481,7 +481,7 @@ function MessageTimelineView(
-                 {(id) => (
-                   <div class="shrink-0 flex items-center gap-2">
-                     {props.search}
--                    <SessionContextUsage placement="bottom" />
-+                    <SessionContextUsage placement="bottom" meta />
-                     <Show when={!parentID() && project()}>
-                       {(project) => (
-                         <SummaryPopover active={props.active} open={summaryOpen()} onOpenChange={setSummary}>
-diff --git a/packages/app/src/session/timeline/session-context-usage.tsx b/packages/app/src/session/timeline/session-context-usage.tsx
-index eaa8f5a5cd4125cd52a8121d3d86f1752b70665d..258c98531ea3949ee38b6b56748823995335c5a3 100644
---- a/packages/app/src/session/timeline/session-context-usage.tsx
-+++ b/packages/app/src/session/timeline/session-context-usage.tsx
-@@ -1,4 +1,5 @@
+diff --git a/packages/gui-extensions/src/usage/i18n/en.ts b/packages/gui-extensions/src/usage/i18n/en.ts
+index 62d5e26fd93fe31ba13f983af9992d55066cb526..dce37e44d07972c8f154b3645e57c2a05a05712a 100644
+--- a/packages/gui-extensions/src/usage/i18n/en.ts
++++ b/packages/gui-extensions/src/usage/i18n/en.ts
+@@ -5,6 +5,10 @@ export default {
+   "usage.usage": "Context",
+   "usage.cost": "Cost",
+   "usage.view": "View context usage",
++  "usage.provider": "Provider",
++  "usage.model": "Model",
++  "usage.effort": "Effort",
++  "usage.compactsAt": "Compacts at",
+   "systemPrompt.title": "System Prompt",
+   "rawMessages.title": "Raw messages",
+   "export.session": "Export session",
+diff --git a/packages/gui-extensions/src/usage/indicator.tsx b/packages/gui-extensions/src/usage/indicator.tsx
+index 6284b97ed6f4a08c5980c427f1c0a444324e7b87..d01573f3867f8bfc2bf527538d97b65cb9dd25fe 100644
+--- a/packages/gui-extensions/src/usage/indicator.tsx
++++ b/packages/gui-extensions/src/usage/indicator.tsx
+@@ -1,10 +1,12 @@
 -import { Show, createMemo, type ComponentProps, type JSX } from "solid-js"
 +import { Show, createEffect, createMemo, createSignal, type ComponentProps, type JSX } from "solid-js"
 +import { Popover } from "@kobalte/core/popover"
  import { ProgressCircle } from "@opencode/ui/progress-circle"
  import { IconButton } from "@opencode/ui/icon-button"
  import { Tooltip } from "@opencode/ui/tooltip"
-@@ -9,13 +10,18 @@ import { useLayout } from "@/shell/state/layout"
- import { useData } from "@/runtime/server/current"
- import { useLanguage } from "@/runtime/i18n/language"
- import { useProviders } from "@/providers/catalog/providers"
-+import { useLocal } from "@/providers/models/selection"
- import { useWorkspaceLocation } from "@/workspaces/location"
- import { useSessionLayout } from "@/session/session-layout"
- import { createSessionTabs } from "@/session/helpers"
+ import { useI18n } from "@opencode/ui/context/i18n"
+ import { Layout, useExtension, type SessionView } from "../sdk"
+ import { catalogModel, syncCatalog } from "./catalog"
 +import { compactionThreshold, formatTokens } from "./context-figures"
  
- interface SessionContextUsageProps {
+ function ContextTooltipRow(props: { name: JSX.Element; value: JSX.Element }) {
+   return (
+@@ -17,8 +19,11 @@ function ContextTooltipRow(props: { name: JSX.Element; value: JSX.Element }) {
+ 
+ export function SessionContextUsage(props: {
+   session: SessionView
 -  variant?: "button" | "indicator"
 +  /** ocelot: "tap" opens every figure in a popover (touch screens, no hover). */
 +  variant?: "button" | "indicator" | "tap"
    placement?: ComponentProps<typeof Tooltip>["placement"]
 +  /** ocelot: provider · model · effort · cost before the circle, in the turn meta's style. */
 +  meta?: boolean
- }
- 
- function ContextTooltipRow(props: { name: JSX.Element; value: JSX.Element }) {
-@@ -65,6 +71,8 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
+ }) {
+   const ctx = useExtension()
+   const layout = ctx.use(Layout)
+@@ -41,6 +46,12 @@ export function SessionContextUsage(props: {
        }),
    )
  
 +  // ocelot: the compaction settings, for where automatic compaction starts.
-+  createEffect(() => void data.location.config.sync({ directory: sdk().directory }))
++  const location = () => (props.session.directory ? { directory: props.session.directory } : undefined)
++  createEffect(() => {
++    if (props.session.server.connected) void props.session.server.data.location.config.sync(location()).catch(() => {})
++  })
++  const config = () => props.session.server.data.location.config.list(location())
    const context = createMemo(() => {
      const message = messages().findLast((item) => item.type === "assistant" && !!item.tokens)
      if (message?.type !== "assistant" || !message.tokens) return
-@@ -77,6 +85,10 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
+@@ -53,6 +64,8 @@ export function SessionContextUsage(props: {
        message.tokens.cache.write
      return {
        total,
 +      limit: model?.limit.context,
-+      compactAt: model
-+        ? compactionThreshold(model.limit, data.location.config.list({ directory: sdk().directory }) ?? [])
-+        : undefined,
++      compactAt: model ? compactionThreshold(model.limit, config() ?? []) : undefined,
        usage: model?.limit.context ? Math.round((total / model.limit.context) * 100) : null,
      }
    })
-@@ -128,19 +140,82 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
+@@ -86,16 +99,86 @@ export function SessionContextUsage(props: {
      </div>
    )
  
 -  const tooltipValue = () => (
 -    <div class="flex w-[120px] flex-col gap-2">
--      <ContextTooltipRow name={language.t("context.usage.cost")} value={cost()} />
-+  // ocelot: the window as used / max (pi's 340k/1M) and where automatic compaction starts.
+-      <ContextTooltipRow name={ctx.t("usage.cost")} value={cost()} />
++  // ocelot: the window as used / max (pi's 340k / 1.0M) and where automatic compaction starts.
 +  const tokens = () => {
 +    const total = formatTokens(context()?.total ?? 0)
 +    const limit = context()?.limit
 +    return limit ? `${total} / ${formatTokens(limit)}` : total
 +  }
-+  const local = useLocal()
++  // The model the conversation runs on (a new selection shows once it is sent), with its effort.
 +  const selected = createMemo(() => {
-+    const model = local.model.current()
-+    const effort = local.model.variant.current()
++    const ref = info()?.model
++    const entry = ref ? catalogModel(props.session, ref) : undefined
 +    return {
-+      provider: model?.provider.name,
-+      model: model?.name,
-+      effort: effort && effort !== "default" ? effort : undefined,
++      provider: entry?.provider.name ?? ref?.providerID,
++      model: entry?.model?.name ?? ref?.id,
++      effort: ref?.variant && ref.variant !== "default" ? ref.variant : undefined,
 +    }
 +  })
 +  const meta = createMemo(() =>
@@ -240,21 +259,18 @@ index eaa8f5a5cd4125cd52a8121d3d86f1752b70665d..258c98531ea3949ee38b6b5674882399
 +  )
 +  const windowRows = () => (
 +    <>
-       <ContextTooltipRow name={language.t("context.usage.usage")} value={`${context()?.usage ?? 0}%`} />
--      <ContextTooltipRow
--        name={language.t("context.usage.tokens")}
--        value={context()?.total.toLocaleString(language.intl()) ?? "0"}
--      />
-+      <ContextTooltipRow name={language.t("context.usage.tokens")} value={tokens()} />
+       <ContextTooltipRow name={ctx.t("usage.usage")} value={`${context()?.usage ?? 0}%`} />
+-      <ContextTooltipRow name={ctx.t("usage.tokens")} value={context()?.total.toLocaleString(i18n.locale()) ?? "0"} />
++      <ContextTooltipRow name={ctx.t("usage.tokens")} value={tokens()} />
 +      <Show when={context()?.compactAt}>
-+        {(at) => <ContextTooltipRow name="Compacts at" value={formatTokens(at())} />}
++        {(at) => <ContextTooltipRow name={ctx.t("usage.compactsAt")} value={formatTokens(at())} />}
 +      </Show>
 +    </>
 +  )
 +  const tooltipValue = () => (
 +    <div class="flex min-w-[120px] flex-col gap-2">
 +      <Show when={!props.meta}>
-+        <ContextTooltipRow name={language.t("context.usage.cost")} value={cost()} />
++        <ContextTooltipRow name={ctx.t("usage.cost")} value={cost()} />
 +      </Show>
 +      {windowRows()}
      </div>
@@ -263,7 +279,7 @@ index eaa8f5a5cd4125cd52a8121d3d86f1752b70665d..258c98531ea3949ee38b6b5674882399
 +
 +  if (variant() === "tap")
 +    return (
-+      <Show when={params.id}>
++      <Show when={props.session.id}>
 +        <Popover open={tapped()} onOpenChange={setTapped} placement="bottom-end" gutter={4}>
 +          <Popover.Trigger
 +            as={IconButton}
@@ -272,18 +288,22 @@ index eaa8f5a5cd4125cd52a8121d3d86f1752b70665d..258c98531ea3949ee38b6b5674882399
 +            size="normal"
 +            class="shrink-0"
 +            icon={compactCircle()}
-+            aria-label={language.t("context.usage.view")}
++            aria-label={ctx.t("usage.view")}
 +          />
 +          <Popover.Portal>
 +            {/* The tooltip's own look, opened by a tap. */}
 +            <Popover.Content data-component="tooltip-v2" data-appearance="compact" class="outline-none">
 +              <div class="flex min-w-[160px] flex-col gap-2">
 +                <Show when={selected().provider}>
-+                  {(name) => <ContextTooltipRow name="Provider" value={name()} />}
++                  {(name) => <ContextTooltipRow name={ctx.t("usage.provider")} value={name()} />}
 +                </Show>
-+                <Show when={selected().model}>{(name) => <ContextTooltipRow name="Model" value={name()} />}</Show>
-+                <Show when={selected().effort}>{(effort) => <ContextTooltipRow name="Effort" value={effort()} />}</Show>
-+                <ContextTooltipRow name={language.t("context.usage.cost")} value={cost()} />
++                <Show when={selected().model}>
++                  {(name) => <ContextTooltipRow name={ctx.t("usage.model")} value={name()} />}
++                </Show>
++                <Show when={selected().effort}>
++                  {(effort) => <ContextTooltipRow name={ctx.t("usage.effort")} value={effort()} />}
++                </Show>
++                <ContextTooltipRow name={ctx.t("usage.cost")} value={cost()} />
 +                {windowRows()}
 +              </div>
 +            </Popover.Content>
@@ -293,7 +313,7 @@ index eaa8f5a5cd4125cd52a8121d3d86f1752b70665d..258c98531ea3949ee38b6b5674882399
 +    )
  
    return (
-     <Show when={params.id}>
+     <Show when={props.session.id}>
 +      <Show when={props.meta && meta()}>
 +        <span data-slot="session-header-meta" class="text-12-regular text-text-weak cursor-default whitespace-nowrap">
 +          {meta()}
@@ -302,3 +322,22 @@ index eaa8f5a5cd4125cd52a8121d3d86f1752b70665d..258c98531ea3949ee38b6b5674882399
        <Tooltip value={tooltipValue()} placement={props.placement ?? "top"} shift={-8}>
          <Show
            when={variant() === "indicator"}
+diff --git a/packages/gui-extensions/src/usage/renderer.tsx b/packages/gui-extensions/src/usage/renderer.tsx
+index 9be12a01d010c2881ab0827070cb7e76bffd159e..01cca66164907f10a727c5c84c83ae213b1f9b94 100644
+--- a/packages/gui-extensions/src/usage/renderer.tsx
++++ b/packages/gui-extensions/src/usage/renderer.tsx
+@@ -33,7 +33,13 @@ const setup: Setup = (ctx) => {
+   ctx.add(Slot, {
+     at: "session.header",
+     order: 10,
+-    render: (input) => <SessionContextUsage session={input.session} placement="bottom" />,
++    render: (input) => <SessionContextUsage session={input.session} placement="bottom" meta />,
++  })
++  // ocelot: on narrow screens the same circle sits in the view switcher; a tap shows every figure.
++  ctx.add(Slot, {
++    at: "session.mobile.nav",
++    order: 10,
++    render: (input) => <SessionContextUsage session={input.session} variant="tap" />,
+   })
+ 
+   ctx.add(

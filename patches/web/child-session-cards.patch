@@ -36,10 +36,10 @@ index 1346efdb6521d28f1b7d9cf3650f9dfcaaa3eb3d..8bd027ec0d45c18dcd10bd3746f943f3
 +  text-transform: none;
 +}
 diff --git a/packages/session-ui/src/message/current-tool-state.ts b/packages/session-ui/src/message/current-tool-state.ts
-index 0cf9028daa8a28c5e50967bf873cfcc99761a5f9..6585458b1cb57b3f39f0463d23378bb50dfb4941 100644
+index 6be1bc932af00dbd7a2c241316247b0b29acb0bb..305cebabf780ecd371db3db911c9cd126c51832e 100644
 --- a/packages/session-ui/src/message/current-tool-state.ts
 +++ b/packages/session-ui/src/message/current-tool-state.ts
-@@ -81,3 +81,22 @@ export function currentContentDefaultOpen(
+@@ -96,3 +96,22 @@ export function currentContentDefaultOpen(
    if (!Array.isArray(files) || files.length === 0) return true
    return !files.every((file) => !!file && typeof file === "object" && "status" in file && file.status === "deleted")
  }
@@ -82,10 +82,10 @@ index 0c4b005329a8ca730f6f7d32d1f289a5972381b7..4d886da10a106583b5fc1d4f75c374d5
    if (["edit", "write", "patch", "apply_patch"].includes(content.name)) return "edit"
    if (["subagent", "task"].includes(content.name)) return "subagents"
 diff --git a/packages/session-ui/src/tools/tool-renderer.tsx b/packages/session-ui/src/tools/tool-renderer.tsx
-index ba3f9084406e53a6a37e31256c7a38e0a3d64c99..be2494089d3f7b14195e32ec15080d4e6ccc7fd4 100644
+index e16b21778204be1b8e90587e60936c96e9865375..348fc745f81417d3640de343153f747547b141a3 100644
 --- a/packages/session-ui/src/tools/tool-renderer.tsx
 +++ b/packages/session-ui/src/tools/tool-renderer.tsx
-@@ -1547,6 +1547,128 @@ ToolRegistry.register({
+@@ -1665,6 +1665,128 @@ ToolRegistry.register({
      )
    },
  })
@@ -214,7 +214,7 @@ index ba3f9084406e53a6a37e31256c7a38e0a3d64c99..be2494089d3f7b14195e32ec15080d4e
  ToolRegistry.register({
    name: "subagent",
    render(props) {
-@@ -1574,89 +1696,17 @@ ToolRegistry.register({
+@@ -1692,89 +1814,17 @@ ToolRegistry.register({
        if (background()) return `${value} (background)`
        return value
      })
@@ -310,7 +310,7 @@ index ba3f9084406e53a6a37e31256c7a38e0a3d64c99..be2494089d3f7b14195e32ec15080d4e
            />
          }
        >
-@@ -1720,7 +1770,10 @@ ToolRegistry.register({
+@@ -1838,7 +1888,10 @@ ToolRegistry.register({
      const code = createMemo(() => (typeof props.input.code === "string" ? props.input.code : ""))
      const output = () => stripAnsi(props.output ?? "").replace(/\r\n?/g, "\n")
      const sawPending = pending()
@@ -321,7 +321,7 @@ index ba3f9084406e53a6a37e31256c7a38e0a3d64c99..be2494089d3f7b14195e32ec15080d4e
        <BasicTool
          {...props}
          icon="console"
-@@ -1746,6 +1799,16 @@ ToolRegistry.register({
+@@ -1864,6 +1917,16 @@ ToolRegistry.register({
            <Show when={output()}>{(value) => <span data-slot="bash-result">{value()}</span>}</Show>
          </ConsoleOutput>
        </BasicTool>

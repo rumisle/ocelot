@@ -36,8 +36,10 @@ cd "$SRC"
 log "bun $BUN_VERSION: installing dependencies"
 retry bun install --frozen-lockfile
 # What build.ts would install itself: native packages for every platform, for cross-compiling.
-deps() { sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" packages/cli/package.json | head -1; }
-(cd packages/cli && retry bun install --os='*' --cpu='*' "@opentui/core@$(deps @opentui/core)" "@opencode-ai/pty@$(deps @opencode-ai/pty)")
+# The pinned versions (package names contain "/", so "|" delimits). Every other dependency is already in
+# bun.lock, so the release-age gate (meant for newly resolved versions) does not apply to this re-resolve.
+deps() { sed -n "s|.*\"$1\": *\"\([^\"]*\)\".*|\1|p" packages/cli/package.json | head -1; }
+(cd packages/cli && retry bun install --minimum-release-age=0 --os='*' --cpu='*' "@opentui/core@$(deps @opentui/core)" "@opencode-ai/pty@$(deps @opencode-ai/pty)")
 git checkout -q -- packages/cli/package.json bun.lock # that install reorders package.json
 
 mkdir -p "$ROOT/dist"
