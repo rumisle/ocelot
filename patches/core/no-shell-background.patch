@@ -1,0 +1,302 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 2 Oct 2026 18:16:42 +0800
+Subject: core/shell: experimental.no_shell_background removes the model's
+ background option
+
+With the flag on, the shell tool's input schema and description sent to the
+model drop the background option (read per request in the context hook, so a
+config change applies to the next request), and a background request runs in
+the foreground. The user can still move a running command to the background;
+the result then says the user did it, asks the model not to wait or poll, and
+the completion still arrives as a steer. Off by default (upstream behavior).
+
+Ocelot-Patch: core/no-shell-background
+
+diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
+index dcb84cb5d12ded7be9cb910954a13b5467249968..297283c4af069701120d8ccd35333a292812f99e 100644
+--- a/packages/client/src/promise/generated/types.ts
++++ b/packages/client/src/promise/generated/types.ts
+@@ -2205,6 +2205,7 @@ export type ConfigEntry =
+         }
+         experimental?: {
+           portable_shell_scanner?: boolean
++          no_shell_background?: boolean
+           subagent_depth?: number
+           policies?: Array<{ action: "provider.use" | "permission"; resource: string; effect: "allow" | "deny" }>
+         }
+diff --git a/packages/core/src/config/normalize.ts b/packages/core/src/config/normalize.ts
+index 8b1126314ac005deadf97290cf82aab9e15e1260..2a16257b53dd60afd77bbee870338036b4bcc342 100644
+--- a/packages/core/src/config/normalize.ts
++++ b/packages/core/src/config/normalize.ts
+@@ -423,6 +423,15 @@ function normalizeExperimental(
+         )
+         if (value !== undefined) result.portable_shell_scanner = value
+       }
++      if (own(experimental, "no_shell_background")) {
++        const value = decodeEncoded(
++          ConfigExperimental.Info.fields.no_shell_background,
++          experimental.no_shell_background,
++          ["experimental", "no_shell_background"],
++          diagnostics,
++        )
++        if (value !== undefined) result.no_shell_background = value
++      }
+       if (own(experimental, "subagent_depth")) {
+         const value = decodeEncoded(
+           ConfigExperimental.Info.fields.subagent_depth,
+diff --git a/packages/core/src/tool/plugin/shell.ts b/packages/core/src/tool/plugin/shell.ts
+index 7f7154a671c3bddb24c09e1e68f8c292b07cce56..041d87730f00fdc18944f18de5c3f38a8de32b73 100644
+--- a/packages/core/src/tool/plugin/shell.ts
++++ b/packages/core/src/tool/plugin/shell.ts
+@@ -5,7 +5,7 @@ import type { Context } from "@opencode/plugin/effect/plugin"
+ import type { SessionHooks } from "@opencode/plugin/effect/session"
+ import type { ShellCreateBefore } from "@opencode/plugin/effect/shell"
+ import type { Tool } from "@opencode/schema/tool"
+-import { Deferred, Effect, Schema, Scope } from "effect"
++import { Deferred, Effect, type JsonSchema, Schema, Scope } from "effect"
+ import { Config } from "../../config.js"
+ import { Environment } from "../../environment/index.js"
+ import { Job } from "../../job.js"
+@@ -32,7 +32,11 @@ const OS =
+       : process.platform === "linux"
+         ? "Linux"
+         : process.platform
+-const description = (shell?: string) =>
++// ocelot (experimental.no_shell_background): only the user can move a command to the background.
++const USER_BACKGROUND_INSTRUCTION =
++  "The user moved this command to the background so you can keep working. When it finishes, its output arrives as a message. You do not need to wait for it or check on it."
++
++const description = (shell?: string, noBackground = false) =>
+   [
+     "Execute a shell command and return its output.",
+     ...(shell ? [`Commands run on ${OS} using ${shell}.`] : []),
+@@ -40,8 +44,12 @@ const description = (shell?: string) =>
+     "Prefer dedicated tools over shell commands when possible.",
+     "When output is large, the full result is saved to a file and a truncated preview is returned.",
+     "Rely on automatic truncation unless filtering the output is more useful.",
+-    "Commands accept an optional timeout, background commands have no timeout by default.",
+-    "Background commands return immediately, and you will be notified when they complete.",
++    ...(noBackground
++      ? ["Commands accept an optional timeout."]
++      : [
++          "Commands accept an optional timeout, background commands have no timeout by default.",
++          "Background commands return immediately, and you will be notified when they complete.",
++        ]),
+   ].join(" ")
+ 
+ export const Input = Schema.Struct({
+@@ -75,15 +83,15 @@ const Output = Schema.Struct({
+ 
+ type Output = typeof Output.Type
+ 
+-const resultMessages = (output: Output) => {
+-  const notice = output.status === "running" ? BACKGROUND_INSTRUCTION : ShellResult.notice(output)
++const resultMessages = (output: Output, instruction = BACKGROUND_INSTRUCTION) => {
++  const notice = output.status === "running" ? instruction : ShellResult.notice(output)
+   return [...(output.output ? [output.output] : []), ...(notice ? [notice] : [])]
+ }
+ 
+-const toolResult = (output: Output) => {
++const toolResult = (output: Output, instruction?: string) => {
+   return {
+     output,
+-    content: resultMessages(output).map((text) => ({ type: "text" as const, text })),
++    content: resultMessages(output, instruction).map((text) => ({ type: "text" as const, text })),
+     metadata: {
+       status: output.status,
+       ...ShellResult.metadata(output),
+@@ -92,13 +100,35 @@ const toolResult = (output: Output) => {
+   }
+ }
+ 
+-const backgroundResult = (shellID: string, file: string) => ({
+-  output: `Command moved to the background (shell ID: ${shellID}).\nOutput is streaming to: ${file}`,
++const backgroundResult = (shellID: string, file: string, byUser = false) => ({
++  output: `${byUser ? "The user moved this command" : "Command moved"} to the background (shell ID: ${shellID}).\nOutput is streaming to: ${file}`,
+   shellID,
+   truncated: false,
+   status: "running" as const,
+ })
+ 
++/** The input schema the model sees, without the background option. */
++function withoutBackground(schema: JsonSchema.JsonSchema): JsonSchema.JsonSchema {
++  const properties = (schema as { properties?: Record<string, JsonSchema.JsonSchema> }).properties
++  if (!properties?.background) return schema
++  const { background: _, ...rest } = properties
++  const timeout = rest.timeout as { description?: string } | undefined
++  return {
++    ...schema,
++    properties: {
++      ...rest,
++      ...(timeout
++        ? {
++            timeout: {
++              ...timeout,
++              description: `Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to ${DEFAULT_TIMEOUT_MS}.`,
++            },
++          }
++        : {}),
++    },
++  } as JsonSchema.JsonSchema
++}
++
+ export const Plugin = {
+   id: "opencode.tool.shell",
+   effect: Effect.fn("ShellTool.Plugin")(function* (ctx: Context) {
+@@ -112,6 +142,9 @@ export const Plugin = {
+     const compatibleShell = shellSelect.resolve({ priority: "compat" })
+     const permission = yield* Permission.Service
+     const config = yield* Config.Service
++    const noBackground = config
++      .entries()
++      .pipe(Effect.map((entries) => Config.latest(entries, "experimental")?.no_shell_background === true))
+ 
+     const prepare = Effect.fn("ShellTool.prepare")(function* (invocation: ShellCreateBefore, context: Tool.Context) {
+       const source = {
+@@ -195,7 +228,9 @@ export const Plugin = {
+           output: Output,
+           execute: (input, context) =>
+             Effect.gen(function* () {
+-              const timeout = input.background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
++              const userOnly = yield* noBackground
++              const background = input.background === true && !userOnly
++              const timeout = background ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
+               let finalTimeout = timeout
+               const info = yield* shell.create(
+                 {
+@@ -248,7 +283,7 @@ export const Plugin = {
+                 run,
+               })
+ 
+-              if (input.background === true) {
++              if (background) {
+                 yield* jobs.background(job.id)
+                 yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                 return backgroundResult(info.id, info.file)
+@@ -260,7 +295,7 @@ export const Plugin = {
+               if (result?.type === "backgrounded") {
+                 yield* shell.timeout(info.id, 0)
+                 yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+-                return backgroundResult(info.id, info.file)
++                return backgroundResult(info.id, info.file, userOnly)
+               }
+               if (result?.info.status === "error")
+                 return yield* Effect.fail(new Error(result.info.error ?? "Command failed"))
+@@ -268,7 +303,12 @@ export const Plugin = {
+ 
+               return yield* Deferred.await(settled)
+             }).pipe(
+-              Effect.map(toolResult),
++              // With background off, a running result can only be one the user moved there.
++              Effect.flatMap((output) =>
++                noBackground.pipe(
++                  Effect.map((userOnly) => toolResult(output, userOnly ? USER_BACKGROUND_INSTRUCTION : undefined)),
++                ),
++              ),
+               Effect.mapError(
+                 (error) => new ToolFailure({ message: `Unable to execute command: ${input.command}`, error }),
+               ),
+@@ -281,7 +321,9 @@ export const Plugin = {
+       Effect.gen(function* () {
+         const tool = event.tools[name]
+         if (!tool) return
+-        tool.description = description(ShellSelect.name(yield* compatibleShell))
++        const userOnly = yield* noBackground
++        tool.description = description(ShellSelect.name(yield* compatibleShell), userOnly)
++        if (userOnly) tool.input = withoutBackground(tool.input)
+       })
+     yield* ctx.session.hook("context", hook)
+     yield* ctx.session.hook("compaction", hook)
+diff --git a/packages/core/test/tool-shell.test.ts b/packages/core/test/tool-shell.test.ts
+index e706d9b0efdc2d2f9c213835532e43d96b97a6f5..c7e885f4837c39ab5bf8832e5f6177a95a6f06e3 100644
+--- a/packages/core/test/tool-shell.test.ts
++++ b/packages/core/test/tool-shell.test.ts
+@@ -1742,6 +1742,71 @@ describe("ShellTool", () => {
+     )
+   }
+ 
++  // ocelot: experimental.no_shell_background
++  const withoutBackground = <A, E, R>(body: (registry: Tool.Interface) => Effect.Effect<A, E, R>) =>
++    Effect.acquireUseRelease(
++      Effect.promise(() => tmpdir()),
++      (tmp) => {
++        reset()
++        return Effect.promise(() =>
++          Bun.write(
++            path.join(tmp.path, "opencode.json"),
++            JSON.stringify({ experimental: { no_shell_background: true } }),
++          ),
++        ).pipe(Effect.andThen(withSession(tmp.path, body)))
++      },
++      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
++    )
++
++  it.live("runs a background request in the foreground when background is off", () =>
++    withoutBackground((registry) =>
++      Effect.gen(function* () {
++        const settled = yield* executeTool(registry, call({ command: "echo still-foreground", background: true }))
++        expect(settled.metadata?.status).toBe("completed")
++        expect(settled.content?.[0]).toMatchObject({ type: "text", text: expect.stringContaining("still-foreground") })
++      }),
++    ),
++  )
++
++  it.live("tells the model the user moved a command to the background when background is off", () =>
++    withoutBackground((registry) =>
++      Effect.gen(function* () {
++        const jobs = yield* Job.Service
++        const scope = yield* Scope.Scope
++        const waiting = yield* executeTool(
++          registry,
++          call({ command: idleCommand, timeout: 50 }, "call-user-background"),
++        ).pipe(Effect.forkIn(scope, { startImmediately: true }))
++        const backgroundWhenReady = (remaining = 1000): Effect.Effect<Job.Info[], Error> =>
++          Effect.gen(function* () {
++            const backgrounded = yield* jobs.backgroundAll({ sessionID })
++            if (backgrounded.length > 0) return backgrounded
++            if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for foreground shell job"))
++            yield* Effect.promise(() => Bun.sleep(1))
++            return yield* backgroundWhenReady(remaining - 1)
++          })
++        yield* backgroundWhenReady()
++        const settled = yield* Fiber.join(waiting)
++        const shellID = typeof settled.metadata?.shellID === "string" ? settled.metadata.shellID : undefined
++        expect(shellID).toStartWith("sh_")
++        if (!shellID) return
++        const shell = yield* Shell.Service
++        const info = yield* shell.get(ID.make(shellID))
++        expect(settled.content).toEqual([
++          {
++            type: "text",
++            text: `The user moved this command to the background (shell ID: ${shellID}).\nOutput is streaming to: ${info.file}`,
++          },
++          {
++            type: "text",
++            text: "The user moved this command to the background so you can keep working. When it finishes, its output arrives as a message. You do not need to wait for it or check on it.",
++          },
++        ])
++        yield* shell.remove(ID.make(shellID))
++      }),
++    ),
++  )
++
+   it.live("backgrounds a foreground command when the session is signaled", () =>
+     Effect.acquireUseRelease(
+       Effect.promise(() => tmpdir()),
+diff --git a/packages/schema/src/config/experimental.ts b/packages/schema/src/config/experimental.ts
+index 84dfa4b19b8a81ba3dd44edcf6d17762be4b00a7..409c4dccfd4861383b503bc6a293d5bded8fb57d 100644
+--- a/packages/schema/src/config/experimental.ts
++++ b/packages/schema/src/config/experimental.ts
+@@ -8,6 +8,11 @@ export class Info extends Schema.Class<Info>("ConfigExperimental.Info")({
+   portable_shell_scanner: Schema.Boolean.pipe(optional).annotate({
+     description: "Enable the experimental portable shell permission scanner. Defaults to false.",
+   }),
++  // ocelot: agents run long commands themselves (e.g. bgjob); no model-initiated background shells.
++  no_shell_background: Schema.Boolean.pipe(optional).annotate({
++    description:
++      "Remove the shell tool's background option, so the model cannot start background commands that report back as messages. Defaults to false.",
++  }),
+   subagent_depth: NonNegativeInt.pipe(optional).annotate({
+     description: "Maximum subagent nesting depth. Defaults to 1.",
+   }),

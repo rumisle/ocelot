@@ -8,12 +8,14 @@
 //   a compaction request (checkpoint or summary prompt) → a filled-in template
 //   anything else → a short paragraph
 // Usage reports the request's size (about 4 characters a token), mostly as cache reads.
-import { mkdirSync, appendFileSync } from "node:fs"
+import { mkdirSync, appendFileSync, writeFileSync } from "node:fs"
 
 const PORT = Number(process.env.FAKE_PORT ?? 4851)
 const FIRST_MS = Number(process.env.FIRST_MS ?? 450)
 const CHUNK_MS = Number(process.env.CHUNK_MS ?? 25)
 const LOG = process.env.FAKE_LOG
+// The newest request body, for checking what the model was sent (tools, system prompt).
+const DUMP = process.env.FAKE_DUMP ?? "/tmp/ocelot-dev/last-request.json"
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const event = (e: any) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`
@@ -50,6 +52,7 @@ Bun.serve({
   async fetch(req) {
     if (!new URL(req.url).pathname.endsWith("/messages")) return new Response("not found", { status: 404 })
     const body = await req.json()
+    if (DUMP) writeFileSync(DUMP, JSON.stringify(body))
     if (LOG) appendFileSync(LOG, JSON.stringify({ time: Date.now(), messages: body.messages?.length, tokens: prompt(body).cache_read_input_tokens + prompt(body).cache_creation_input_tokens + 40, last: newestUserText(body).text.slice(0, 40), roles: (body.messages ?? []).map((m: any) => m.role[0]).join("") }) + "\n")
     const { text, afterTool } = newestUserText(body)
     const shell = !afterTool && text.match(/SHELL (.+)/)

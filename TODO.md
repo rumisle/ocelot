@@ -223,8 +223,10 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
    AGENTS.md (log + `tmux wait-for`, short wait then guarded long wait). It already avoids all
    five problems; the user is making the recipe less verbose for weaker models. OpenCode
    doesn't need to know about the jobs.
-   - [ ] Step 1: remove the `background` option and its "you will be notified, DO NOT poll"
-         instructions from the shell tool, so no synthetic user-role notifications exist.
+   - [x] Step 1 (core/no-shell-background, opt-in `experimental.no_shell_background`): the model no
+         longer sees the `background` option (schema + description rewritten per request); a background
+         request runs in the foreground. The user's "move to background" stays: plain wording ("the user
+         moved this command…, no need to wait or check"), completion still a steer.
    - [ ] Step 2 (the one gap tmux leaves): a yield window. A command the agent didn't expect
          to be slow shouldn't block it: past ~10-30 s the shell tool hands the still-running
          command over to a tmux session and returns "still running in tmux session X, log L,

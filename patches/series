@@ -31,3 +31,4 @@ web/scrollback-resync.patch
 web/ios-history-prepend.patch
 web/timeline-position.patch
 web/working-timer-resync.patch
+core/no-shell-background.patch
