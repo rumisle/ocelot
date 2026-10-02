@@ -1,0 +1,304 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Fri, 2 Oct 2026 21:35:56 +0800
+Subject: app/session: model, cost and context window at a glance
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Desktop: the session header shows provider · model · effort · cost (the
+composer's current selection; effort hidden at its default) in the turn meta's
+style, left of the context circle. Hovering the circle shows the context %,
+the window as used / max in pi's short form (8.1k / 1.0M) and where automatic
+compaction starts, computed from the same compaction config as core.
+
+Phone: the same circle sits in the Session/Changes/Files/Terminal row; a tap
+opens every figure in a popover with the tooltip's look.
+
+Ocelot-Patch: web/session-header-meta
+
+diff --git a/packages/app/src/session/review/view.tsx b/packages/app/src/session/review/view.tsx
+index e2e81013609579849cd1a6630fea4b7f7b0b7a5f..3553485ef62ee49c0206337e85ede50b4b329925 100644
+--- a/packages/app/src/session/review/view.tsx
++++ b/packages/app/src/session/review/view.tsx
+@@ -1,4 +1,5 @@
+ import { SessionReviewEmptyChangesV2 } from "@opencode/session-ui/v2/session-review-empty-changes-v2"
++import { SessionContextUsage } from "@/session/timeline/session-context-usage"
+ import { SessionReviewV2SidebarToggle } from "@opencode/session-ui/v2/session-review-v2"
+ import { Select } from "@opencode/ui/select"
+ import { Tabs } from "@opencode/ui/tabs"
+@@ -65,6 +66,8 @@ export function SessionMobileViewTabs(props: {
+           </For>
+         </Tabs.List>
+       </Tabs>
++      {/* ocelot: model, cost and context window, opened with a tap. */}
++      <SessionContextUsage variant="tap" />
+       <Menu
+         appearance="standard"
+         modal={false}
+diff --git a/packages/app/src/session/timeline/context-figures.test.ts b/packages/app/src/session/timeline/context-figures.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ea264a5aea921b2a985e65a1f207e782bda21b66
+--- /dev/null
++++ b/packages/app/src/session/timeline/context-figures.test.ts
+@@ -0,0 +1,47 @@
++import { describe, expect, test } from "bun:test"
++import type { ConfigEntry } from "@opencode/client/promise"
++import { compactionThreshold, formatTokens } from "./context-figures"
++
++const doc = (compaction: object) => ({ type: "document", info: { compaction } }) as unknown as ConfigEntry
++
++describe("formatTokens", () => {
++  test("shortens like pi", () => {
++    expect([950, 8086, 340_412, 1_000_000, 1_234_567, 12_000_000].map(formatTokens)).toEqual([
++      "950",
++      "8.1k",
++      "340k",
++      "1.0M",
++      "1.2M",
++      "12M",
++    ])
++  })
++})
++
++describe("compactionThreshold", () => {
++  const million = { context: 1_000_000 }
++  test("summary strategy keeps 10% free", () => {
++    expect(compactionThreshold(million, [])).toBe(900_000)
++    expect(compactionThreshold({ context: 200_000 }, [])).toBe(180_000)
++  })
++  test("a buffer replaces the 10%", () => {
++    expect(compactionThreshold(million, [doc({ buffer: 50_000 })])).toBe(950_000)
++  })
++  test("checkpoint caps at 540k and 90%", () => {
++    expect(compactionThreshold(million, [doc({ strategy: "checkpoint" })])).toBe(540_000)
++    expect(compactionThreshold({ context: 200_000 }, [doc({ strategy: "checkpoint" })])).toBe(180_000)
++  })
++  test("fields merge across documents, later wins", () => {
++    const entries = [doc({ strategy: "checkpoint" }), doc({ threshold: { tokens: 300_000 } })]
++    expect(compactionThreshold(million, entries)).toBe(300_000)
++  })
++  test("native compaction ignores the checkpoint caps", () => {
++    expect(compactionThreshold(million, [doc({ strategy: "checkpoint" })], true)).toBe(900_000)
++  })
++  test("off or unknown window: none", () => {
++    expect(compactionThreshold(million, [doc({ auto: false })])).toBeUndefined()
++    expect(compactionThreshold({ context: 0 }, [])).toBeUndefined()
++  })
++  test("the input limit wins over the context window", () => {
++    expect(compactionThreshold({ context: 1_000_000, input: 272_000 }, [])).toBe(244_800)
++  })
++})
+diff --git a/packages/app/src/session/timeline/context-figures.ts b/packages/app/src/session/timeline/context-figures.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7f05850d28469334ef32e7ccf767f3efb074673c
+--- /dev/null
++++ b/packages/app/src/session/timeline/context-figures.ts
+@@ -0,0 +1,53 @@
++import type { ConfigEntry } from "@opencode/client/promise"
++
++/** Token counts the way pi's footer shows them: 950, 8.1k, 340k, 1.2M, 12M. */
++export function formatTokens(count: number): string {
++  if (count < 1000) return count.toString()
++  if (count < 10000) return `${(count / 1000).toFixed(1)}k`
++  if (count < 1000000) return `${Math.round(count / 1000)}k`
++  if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`
++  return `${Math.round(count / 1000000)}M`
++}
++
++// Mirrors core/src/session/compaction.ts (calculateCeiling, checkpointCeiling) and the per-field merge in
++// core/src/config/plugin/compaction.ts. Keep them in step.
++const RESERVE_MIN = 16_000
++const CHECKPOINT_RATIO = 0.9
++const CHECKPOINT_MAX = 540_000
++
++type Settings = { auto?: boolean; buffer?: number; strategy?: "summary" | "checkpoint"; ratio?: number; max?: number }
++
++function settings(entries: readonly ConfigEntry[]): Settings {
++  const result: Settings = {}
++  for (const entry of entries) {
++    if (entry.type !== "document" || !entry.info.compaction) continue
++    const compaction = entry.info.compaction
++    if (compaction.auto !== undefined) result.auto = compaction.auto
++    if (compaction.buffer !== undefined) result.buffer = compaction.buffer
++    if (compaction.strategy !== undefined) result.strategy = compaction.strategy
++    if (compaction.threshold?.ratio !== undefined) result.ratio = compaction.threshold.ratio
++    if (compaction.threshold?.tokens !== undefined) result.max = compaction.threshold.tokens
++  }
++  return result
++}
++
++/**
++ * When automatic compaction starts for a model with these limits, in tokens. `undefined` when it never does
++ * on its own (turned off, or the window is unknown).
++ */
++export function compactionThreshold(
++  limit: { context: number; input?: number },
++  entries: readonly ConfigEntry[],
++  native = false,
++): number | undefined {
++  const config = settings(entries)
++  if (config.auto === false) return undefined
++  const window = limit.input || limit.context
++  if (window <= 0) return undefined
++  const ceiling =
++    config.buffer !== undefined
++      ? window - config.buffer
++      : window - Math.max(Math.floor(window * 0.1), window >= 2 * RESERVE_MIN ? RESERVE_MIN : 0)
++  if (config.strategy !== "checkpoint" || native) return ceiling
++  return Math.min(ceiling, Math.floor(window * (config.ratio ?? CHECKPOINT_RATIO)), config.max ?? CHECKPOINT_MAX)
++}
+diff --git a/packages/app/src/session/timeline/message-timeline.tsx b/packages/app/src/session/timeline/message-timeline.tsx
+index de07be6fb39c98d0d4cca8c15d1c8e4d0f17ca97..026242374c5d4862c4b284bc56bb661c31efb379 100644
+--- a/packages/app/src/session/timeline/message-timeline.tsx
++++ b/packages/app/src/session/timeline/message-timeline.tsx
+@@ -481,7 +481,7 @@ function MessageTimelineView(
+                 {(id) => (
+                   <div class="shrink-0 flex items-center gap-2">
+                     {props.search}
+-                    <SessionContextUsage placement="bottom" />
++                    <SessionContextUsage placement="bottom" meta />
+                     <Show when={!parentID() && project()}>
+                       {(project) => (
+                         <SummaryPopover active={props.active} open={summaryOpen()} onOpenChange={setSummary}>
+diff --git a/packages/app/src/session/timeline/session-context-usage.tsx b/packages/app/src/session/timeline/session-context-usage.tsx
+index eaa8f5a5cd4125cd52a8121d3d86f1752b70665d..258c98531ea3949ee38b6b56748823995335c5a3 100644
+--- a/packages/app/src/session/timeline/session-context-usage.tsx
++++ b/packages/app/src/session/timeline/session-context-usage.tsx
+@@ -1,4 +1,5 @@
+-import { Show, createMemo, type ComponentProps, type JSX } from "solid-js"
++import { Show, createEffect, createMemo, createSignal, type ComponentProps, type JSX } from "solid-js"
++import { Popover } from "@kobalte/core/popover"
+ import { ProgressCircle } from "@opencode/ui/progress-circle"
+ import { IconButton } from "@opencode/ui/icon-button"
+ import { Tooltip } from "@opencode/ui/tooltip"
+@@ -9,13 +10,18 @@ import { useLayout } from "@/shell/state/layout"
+ import { useData } from "@/runtime/server/current"
+ import { useLanguage } from "@/runtime/i18n/language"
+ import { useProviders } from "@/providers/catalog/providers"
++import { useLocal } from "@/providers/models/selection"
+ import { useWorkspaceLocation } from "@/workspaces/location"
+ import { useSessionLayout } from "@/session/session-layout"
+ import { createSessionTabs } from "@/session/helpers"
++import { compactionThreshold, formatTokens } from "./context-figures"
+ 
+ interface SessionContextUsageProps {
+-  variant?: "button" | "indicator"
++  /** ocelot: "tap" opens every figure in a popover (touch screens, no hover). */
++  variant?: "button" | "indicator" | "tap"
+   placement?: ComponentProps<typeof Tooltip>["placement"]
++  /** ocelot: provider · model · effort · cost before the circle, in the turn meta's style. */
++  meta?: boolean
+ }
+ 
+ function ContextTooltipRow(props: { name: JSX.Element; value: JSX.Element }) {
+@@ -65,6 +71,8 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
+       }),
+   )
+ 
++  // ocelot: the compaction settings, for where automatic compaction starts.
++  createEffect(() => void data.location.config.sync({ directory: sdk().directory }))
+   const context = createMemo(() => {
+     const message = messages().findLast((item) => item.type === "assistant" && !!item.tokens)
+     if (message?.type !== "assistant" || !message.tokens) return
+@@ -77,6 +85,10 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
+       message.tokens.cache.write
+     return {
+       total,
++      limit: model?.limit.context,
++      compactAt: model
++        ? compactionThreshold(model.limit, data.location.config.list({ directory: sdk().directory }) ?? [])
++        : undefined,
+       usage: model?.limit.context ? Math.round((total / model.limit.context) * 100) : null,
+     }
+   })
+@@ -128,19 +140,82 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
+     </div>
+   )
+ 
+-  const tooltipValue = () => (
+-    <div class="flex w-[120px] flex-col gap-2">
+-      <ContextTooltipRow name={language.t("context.usage.cost")} value={cost()} />
++  // ocelot: the window as used / max (pi's 340k/1M) and where automatic compaction starts.
++  const tokens = () => {
++    const total = formatTokens(context()?.total ?? 0)
++    const limit = context()?.limit
++    return limit ? `${total} / ${formatTokens(limit)}` : total
++  }
++  const local = useLocal()
++  const selected = createMemo(() => {
++    const model = local.model.current()
++    const effort = local.model.variant.current()
++    return {
++      provider: model?.provider.name,
++      model: model?.name,
++      effort: effort && effort !== "default" ? effort : undefined,
++    }
++  })
++  const meta = createMemo(() =>
++    [selected().provider, selected().model, selected().effort, cost()].filter(Boolean).join(" · "),
++  )
++  const windowRows = () => (
++    <>
+       <ContextTooltipRow name={language.t("context.usage.usage")} value={`${context()?.usage ?? 0}%`} />
+-      <ContextTooltipRow
+-        name={language.t("context.usage.tokens")}
+-        value={context()?.total.toLocaleString(language.intl()) ?? "0"}
+-      />
++      <ContextTooltipRow name={language.t("context.usage.tokens")} value={tokens()} />
++      <Show when={context()?.compactAt}>
++        {(at) => <ContextTooltipRow name="Compacts at" value={formatTokens(at())} />}
++      </Show>
++    </>
++  )
++  const tooltipValue = () => (
++    <div class="flex min-w-[120px] flex-col gap-2">
++      <Show when={!props.meta}>
++        <ContextTooltipRow name={language.t("context.usage.cost")} value={cost()} />
++      </Show>
++      {windowRows()}
+     </div>
+   )
++  const [tapped, setTapped] = createSignal(false)
++
++  if (variant() === "tap")
++    return (
++      <Show when={params.id}>
++        <Popover open={tapped()} onOpenChange={setTapped} placement="bottom-end" gutter={4}>
++          <Popover.Trigger
++            as={IconButton}
++            type="button"
++            variant="ghost-muted"
++            size="normal"
++            class="shrink-0"
++            icon={compactCircle()}
++            aria-label={language.t("context.usage.view")}
++          />
++          <Popover.Portal>
++            {/* The tooltip's own look, opened by a tap. */}
++            <Popover.Content data-component="tooltip-v2" data-appearance="compact" class="outline-none">
++              <div class="flex min-w-[160px] flex-col gap-2">
++                <Show when={selected().provider}>
++                  {(name) => <ContextTooltipRow name="Provider" value={name()} />}
++                </Show>
++                <Show when={selected().model}>{(name) => <ContextTooltipRow name="Model" value={name()} />}</Show>
++                <Show when={selected().effort}>{(effort) => <ContextTooltipRow name="Effort" value={effort()} />}</Show>
++                <ContextTooltipRow name={language.t("context.usage.cost")} value={cost()} />
++                {windowRows()}
++              </div>
++            </Popover.Content>
++          </Popover.Portal>
++        </Popover>
++      </Show>
++    )
+ 
+   return (
+     <Show when={params.id}>
++      <Show when={props.meta && meta()}>
++        <span data-slot="session-header-meta" class="text-12-regular text-text-weak cursor-default whitespace-nowrap">
++          {meta()}
++        </span>
++      </Show>
+       <Tooltip value={tooltipValue()} placement={props.placement ?? "top"} shift={-8}>
+         <Show
+           when={variant() === "indicator"}

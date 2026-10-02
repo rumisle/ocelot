@@ -241,9 +241,10 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
 7. [x] **Tool time elapsed.** Patch web/tool-elapsed: "Shell 12s" after the tool name (execution time
    ran→completed, live while running, hidden under 1 s); collapsed groups show first start → last end. Tool parts already record `time.created/ran/completed`: show the
    duration (live while running) in the tool row. Shell rows have created/completed too.
-8. **Session header (HIGH PRIORITY), desktop and mobile.** Always visible: model, effort, context %
-   (bar) and cost; Changes / Files / Terminal move into a menu. On mobile the current top bar
-   wastes a lot of vertical space. Needs a design pass (sketch first).
+8. [x] **Session header** (web/session-header-meta): desktop shows provider · model · effort · cost next to the
+   context circle; hovering it shows context %, window used/max (pi's 8.1k / 1.0M) and the compaction threshold.
+   Phone: the circle in the Session/Changes/Files/Terminal row, tap for all figures. Bigger layout changes
+   (dropping the phone's tab row) rejected for now as too big a change.
 9. **Pi-style rewind to any step.** Each model step is its own assistant message, and
    `_ocelot_branch` can park from any message, so "rewind here" on a step (e.g. before a tool
    result that trips a classifier) + a steering message is a UI + small core change: allow the
