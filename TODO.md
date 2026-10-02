@@ -56,7 +56,9 @@ Open:
 - Never test against real models. Use a fake provider (like opencode-octopi's
   `test/fake-anthropic.ts`) and a throwaway server with its own XDG dirs.
 - `scripts/dev-server.sh start` runs one: the built binary + `test/fake-anthropic.ts` (streams with
-  realistic timings and cache usage; `LINES n`, `SHELL cmd`, `ECHO text`), web UI at http://127.0.0.1:4852 (opencode / test).
+  realistic timings and cache usage; `LINES n`, `SHELL cmd`, `ECHO text`, `QUESTION text`), web UI at http://127.0.0.1:4852 (opencode / test).
+- Web Push, server side: `uv run --with http_ece,cryptography,requests python test/web-push-check.py`
+  against the dev server (fake push service; decrypts and verifies VAPID independently).
 - Unit tests: `scripts/test.sh [pkg ...]` or `scripts/test.sh pkg file ...`. It uses the pinned bun
   (1.4.2, not the system 1.3.11) and each package's own runner (core's script/test.ts sets the test
   HOME, app needs the happydom preload). Plain `bun test` gave ~40 false failures (plugin reload,
@@ -117,6 +119,14 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       session cookie (HttpOnly, SameSite=Lax, 30 days).
 - [x] Download files from the file view: patch `web/file-download` ("Download" in the artifact
       toolbar, an icon on plain text files). Not checked on the phone layout yet.
+- [x] Push notifications (2.0.22-2): patches `cli/web-push` (VAPID, subscriptions, presence, event →
+      push) and `web/push-notifications` (service worker, Settings > Notifications > Push, presence
+      reports, tap opens the session). Nothing is pushed while any web app is in use (visible,
+      focused, input in the last 3 min). Title = session title; body = the reply / "Needs
+      permission · …" / the question / "Failed · …". Also notifies in the browser for permissions
+      and questions (upstream had the switch but no code).
+- [ ] Push: confirm on the iPhone (home screen app): tap with the app closed opens the session
+      (`clients.openWindow`; automation can't fake a real tap), delivery, one per session.
 
 ### Plugin UI in the web app
 - [ ] General way for plugins to add UI to the web app (upstream only has TUI plugin slots).

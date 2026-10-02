@@ -5,6 +5,7 @@
 // stats have realistic numbers. The newest user text scripts it:
 //   "LINES n"  → a numbered list of n lines (long output, for scrolling)
 //   "SHELL x"  → calls the shell tool with command x first, then answers
+//   "QUESTION x" → asks x through the question tool (Yes / No) first, then answers
 //   "ECHO x"   → replies x verbatim (markdown, math)
 //   a compaction request (checkpoint or summary prompt) → a filled-in template
 //   anything else → a short paragraph
@@ -59,15 +60,21 @@ Bun.serve({
     if (LOG) appendFileSync(LOG, JSON.stringify({ time: Date.now(), messages: body.messages?.length, tokens: prompt(body).cache_read_input_tokens + prompt(body).cache_creation_input_tokens + 40, last: newestUserText(body).text.slice(0, 40), roles: (body.messages ?? []).map((m: any) => m.role[0]).join("") }) + "\n")
     const { text, afterTool } = newestUserText(body)
     const shell = !afterTool && text.match(/SHELL (.+)/)
+    const question = !afterTool && text.match(/QUESTION (.+)/)
+    const tool = shell
+      ? { name: "shell", input: { command: shell[1], description: "Run the test command" } }
+      : question
+        ? { name: "question", input: { questions: [{ header: "Choice", question: question[1], options: [{ label: "Yes", description: "" }, { label: "No", description: "" }] }] } }
+        : undefined
     const stream = new ReadableStream({
       async start(controller) {
         const send = (e: any) => controller.enqueue(new TextEncoder().encode(event(e)))
         send({ type: "message_start", message: { id: `msg_${Date.now()}`, type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, usage: prompt(body) } })
         await sleep(FIRST_MS)
         let output = 0
-        if (shell) {
-          send({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: `toolu_${Date.now()}`, name: "shell", input: {} } })
-          send({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ command: shell[1], description: "Run the test command" }) } })
+        if (tool) {
+          send({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: `toolu_${Date.now()}`, name: tool.name, input: {} } })
+          send({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(tool.input) } })
           send({ type: "content_block_stop", index: 0 })
           output = 30
         } else {
@@ -79,7 +86,7 @@ Bun.serve({
           }
           send({ type: "content_block_stop", index: 0 })
         }
-        send({ type: "message_delta", delta: { stop_reason: shell ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: output } })
+        send({ type: "message_delta", delta: { stop_reason: tool ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: output } })
         send({ type: "message_stop" })
         controller.close()
       },

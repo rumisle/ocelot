@@ -1,0 +1,508 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 3 Oct 2026 01:48:20 +0800
+Subject: app: push notifications to this device; notify for permissions and
+ questions
+
+Settings > Notifications gets "Push to this device" (with the last
+delivery or failure, and a test button). The three notification switches
+choose what is pushed. The service worker (public/ocelot-push-sw.js,
+imported by the generated one) shows every push, one per session, and a
+tap opens the session: in an open window, or a new one. Opening a session
+closes its notifications on this device. Every page reports whether it
+is in use, so the server holds pushes back while you are at one. On a
+device with push on, the page's own system notifications are skipped:
+the push covers them.
+
+The Permissions switch and sound now also apply: a permission request or
+a question in a session with an open tab notifies like a finished turn.
+
+Ocelot-Patch: web/push-notifications
+
+diff --git a/packages/app/public/ocelot-push-sw.js b/packages/app/public/ocelot-push-sw.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..1d4617b62043a074d6eb5665b4cfeceb50147eec
+--- /dev/null
++++ b/packages/app/public/ocelot-push-sw.js
+@@ -0,0 +1,36 @@
++// ocelot: Web Push (packages/cli/src/services/web-push.ts), imported by the generated service worker.
++
++self.addEventListener("push", (event) => {
++  const data = (() => {
++    try {
++      return event.data?.json() ?? {}
++    } catch {
++      return {}
++    }
++  })()
++  // Always show something: iOS revokes a subscription whose pushes show nothing.
++  event.waitUntil(
++    self.registration.showNotification(data.title || "OpenCode", {
++      body: data.body ?? "",
++      icon: "/web-app-manifest-192x192.png",
++      // One notification per session: a newer one replaces it.
++      tag: data.session,
++      renotify: typeof data.session === "string",
++      data: { session: data.session, url: data.url },
++    }),
++  )
++})
++
++self.addEventListener("notificationclick", (event) => {
++  event.notification.close()
++  const data = event.notification.data ?? {}
++  event.waitUntil(
++    (async () => {
++      const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true })
++      const client = windows.find((item) => item.visibilityState === "visible") ?? windows[0]
++      if (client === undefined) return self.clients.openWindow(data.url || "/")
++      await client.focus().catch(() => undefined)
++      if (typeof data.session === "string") client.postMessage({ type: "ocelot.push.open", session: data.session })
++    })(),
++  )
++})
+diff --git a/packages/app/src/runtime/i18n/en.ts b/packages/app/src/runtime/i18n/en.ts
+index de92121cd0691e5ffae0eb49923a1da0a0cd0eed..1bf41416e20d449df9678b64d08a563402f1e459 100644
+--- a/packages/app/src/runtime/i18n/en.ts
++++ b/packages/app/src/runtime/i18n/en.ts
+@@ -463,6 +463,8 @@ export const dict = {
+   "notification.session.responseReady.title": "Response ready",
+   "notification.session.error.title": "Session error",
+   "notification.session.error.fallbackDescription": "An error occurred",
++  "notification.session.permission.title": "Permission needed",
++  "notification.session.question.title": "Question",
+ 
+   "home.title": "Home",
+   "home.projects": "Projects",
+@@ -656,6 +658,20 @@ export const dict = {
+   "settings.appearance.row.tabs.horizontal": "Horizontal",
+   "settings.appearance.row.tabs.vertical": "Vertical",
+   "settings.notifications.description": "Choose when to receive notifications and hear sounds",
++  "settings.notifications.push.section": "Push",
++  "settings.notifications.push.title": "Push to this device",
++  "settings.notifications.push.description":
++    "Get the notifications above on this device even when OpenCode is closed, while no OpenCode window is in use",
++  "settings.notifications.push.unsupported":
++    "Not available in this browser. On iPhone and iPad, add OpenCode to the Home Screen and open it from there",
++  "settings.notifications.push.denied": "Notifications are blocked for this site. Allow them in the system settings",
++  "settings.notifications.push.waiting": "On. Nothing delivered yet",
++  "settings.notifications.push.delivered": "On. Last delivered {{time}}",
++  "settings.notifications.push.failed": "On, but the last delivery failed: {{error}}",
++  "settings.notifications.push.error": "Could not change push: {{error}}",
++  "settings.notifications.push.test.title": "Test notification",
++  "settings.notifications.push.test.description": "Send a notification to this device now",
++  "settings.notifications.push.test.action": "Send",
+   "settings.shortcuts.description": "Customize shortcuts for common actions",
+   "settings.servers.description": "Manage server connections",
+   "settings.server.description": "Manage this server’s connection and preferences",
+diff --git a/packages/app/src/session/route.tsx b/packages/app/src/session/route.tsx
+index 0c46de18f78212b54ddf6316f676a71fb16213e0..5ec008de8cab85f94d6308ab6012f0fe586b1af8 100644
+--- a/packages/app/src/session/route.tsx
++++ b/packages/app/src/session/route.tsx
+@@ -11,6 +11,8 @@ import { ModelsProvider } from "@/providers/models/models"
+ import { useProviders } from "@/providers/catalog/providers"
+ import { useLanguage } from "@/runtime/i18n/language"
+ import { useNotification } from "@/shell/notifications/notification"
++import { Push } from "@/shell/notifications/push"
++import { makeEventListener } from "@solid-primitives/event-listener"
+ import { ComposerPersistenceProvider } from "@/composer/persistence"
+ import { useData, useServer } from "@/runtime/server/current"
+ import { ServerConnection } from "@/runtime/server/registry"
+@@ -183,6 +185,13 @@ function SessionPage() {
+ 
+ function MarkSessionNotificationsViewed(props: { sessionID: () => string | undefined }) {
+   const notification = useNotification()
++  // ocelot: close this device's pushed notifications for the session on screen.
++  const dismiss = () => {
++    const sessionID = props.sessionID()
++    if (sessionID && document.visibilityState === "visible") Push.dismiss(sessionID)
++  }
++  createEffect(dismiss)
++  makeEventListener(document, "visibilitychange", dismiss)
+   createEffect(() => {
+     const sessionID = props.sessionID()
+     if (!notification.ready() || !sessionID) return
+diff --git a/packages/app/src/settings/notifications/notifications.tsx b/packages/app/src/settings/notifications/notifications.tsx
+index d8e72c54d2352bfa9f24bab0653c66ba2008177c..c1b544d2e1afb8e39612be4a85050228a9a9e94b 100644
+--- a/packages/app/src/settings/notifications/notifications.tsx
++++ b/packages/app/src/settings/notifications/notifications.tsx
+@@ -10,6 +10,7 @@ import {
+   soundOptions,
+   type SoundSettingsController,
+ } from "@/settings/general/controllers"
++import { SettingsPush } from "@/settings/notifications/push"
+ import "@/settings/settings.css"
+ 
+ const soundSettings = {
+@@ -113,6 +114,8 @@ export const SettingsNotifications: Component = () => {
+           </SettingsList>
+         </div>
+ 
++        <SettingsPush />
++
+         <div class="settings-section">
+           <h3 class="settings-section-title">{language.t("settings.general.section.sounds")}</h3>
+           <SettingsList>
+diff --git a/packages/app/src/settings/notifications/push.tsx b/packages/app/src/settings/notifications/push.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..b6732938018e6d4e9ad3a3a415f8a56783d62766
+--- /dev/null
++++ b/packages/app/src/settings/notifications/push.tsx
+@@ -0,0 +1,81 @@
++import { Component, Show, onMount } from "solid-js"
++import { createStore } from "solid-js/store"
++import { Button } from "@opencode/ui/button"
++import { Switch } from "@opencode/ui/switch"
++import { useLanguage } from "@/runtime/i18n/language"
++import { useSettings } from "@/settings/model"
++import { SettingsList } from "@/settings/list"
++import { SettingsRow } from "@/settings/row"
++import { Push, type PushStatus } from "@/shell/notifications/push"
++
++// ocelot: push to this device (see shell/notifications/push.ts).
++export const SettingsPush: Component = () => {
++  const language = useLanguage()
++  const settings = useSettings()
++  const [state, setState] = createStore({
++    on: false,
++    busy: false,
++    denied: false,
++    status: undefined as PushStatus | undefined,
++    error: undefined as string | undefined,
++  })
++
++  const run = async (task: () => Promise<PushStatus | undefined>) => {
++    setState({ busy: true, error: undefined })
++    const status = await task().catch((error: unknown) => {
++      setState("error", error instanceof Error ? error.message : String(error))
++      return undefined
++    })
++    setState({ busy: false, on: Push.enabled(), status, denied: Notification.permission === "denied" })
++  }
++
++  onMount(() => {
++    if (Push.supported()) void run(() => Push.sync(Push.kinds(settings.notifications)))
++  })
++
++  const toggle = (checked: boolean) =>
++    void run(async () => {
++      if (!checked) return Push.disable().then(() => undefined)
++      return Push.enable(Push.kinds(settings.notifications))
++    })
++
++  const description = () => {
++    if (!Push.supported()) return language.t("settings.notifications.push.unsupported")
++    if (state.denied) return language.t("settings.notifications.push.denied")
++    if (state.error) return language.t("settings.notifications.push.error", { error: state.error })
++    if (!state.on) return language.t("settings.notifications.push.description")
++    if (state.status?.failed) return language.t("settings.notifications.push.failed", { error: state.status.failed })
++    if (state.status?.delivered)
++      return language.t("settings.notifications.push.delivered", {
++        time: new Date(state.status.delivered).toLocaleString(),
++      })
++    return language.t("settings.notifications.push.waiting")
++  }
++
++  return (
++    <div class="settings-section">
++      <h3 class="settings-section-title">{language.t("settings.notifications.push.section")}</h3>
++      <SettingsList>
++        <SettingsRow title={language.t("settings.notifications.push.title")} description={description()}>
++          <div data-action="settings-notifications-push">
++            <Switch
++              checked={state.on}
++              disabled={!Push.supported() || state.busy}
++              onChange={(checked) => toggle(checked)}
++            />
++          </div>
++        </SettingsRow>
++        <Show when={state.on}>
++          <SettingsRow
++            title={language.t("settings.notifications.push.test.title")}
++            description={language.t("settings.notifications.push.test.description")}
++          >
++            <Button variant="neutral" disabled={state.busy} onClick={() => void run(() => Push.test())}>
++              {language.t("settings.notifications.push.test.action")}
++            </Button>
++          </SettingsRow>
++        </Show>
++      </SettingsList>
++    </div>
++  )
++}
+diff --git a/packages/app/src/shell/notifications/notification.tsx b/packages/app/src/shell/notifications/notification.tsx
+index 81965c1d3ed5b0440dcd54e2896e03ec939fe1a3..3282275fbdb779f421f44e78c167ea631fd3fbee 100644
+--- a/packages/app/src/shell/notifications/notification.tsx
++++ b/packages/app/src/shell/notifications/notification.tsx
+@@ -12,6 +12,7 @@ import { decode64 } from "@/runtime/persistence/base64"
+ import { Persist, persisted } from "@/runtime/persistence/storage"
+ import { Persistence } from "@/runtime/persistence/schema"
+ import { playSoundById } from "@/shell/notifications/sound"
++import { Push } from "@/shell/notifications/push"
+ import type { createNotificationCoordinator } from "@/shell/notifications/coordinator"
+ import { useGlobal } from "@/runtime/server/runtime"
+ import { ServerConnection, useServers } from "@/runtime/server/registry"
+@@ -241,7 +242,7 @@ export function createServerNotificationState(input: {
+         session: sessionID,
+       })
+ 
+-      if (hasOpenTab && settings.notifications.agent()) {
++      if (hasOpenTab && settings.notifications.agent() && !Push.enabled()) {
+         void input.coordinator.system(`${input.key}\0${eventID}`, () =>
+           platform.notify(language.t("notification.session.responseReady.title"), session.title ?? sessionID, () =>
+             openNotificationSession(tabs, input.key, sessionID),
+@@ -272,7 +273,7 @@ export function createServerNotificationState(input: {
+       const description =
+         session?.title ??
+         (typeof error === "string" ? error : language.t("notification.session.error.fallbackDescription"))
+-      if (hasOpenTab && settings.notifications.errors()) {
++      if (hasOpenTab && settings.notifications.errors() && !Push.enabled()) {
+         void input.coordinator.system(`${input.key}\0${eventID}`, () =>
+           platform.notify(language.t("notification.session.error.title"), description, () =>
+             openNotificationSession(tabs, input.key, sessionID),
+@@ -282,7 +283,47 @@ export function createServerNotificationState(input: {
+     })
+   }
+ 
++  // ocelot: a permission or a question waits for you (the settings had a switch and sound for it).
++  const handleAttention = (sessionID: string, eventID: string, title: string) => {
++    const root = async (id: string): Promise<Awaited<ReturnType<typeof lookup>>> => {
++      const session = await lookup(id)
++      return session?.parentID ? root(session.parentID) : session
++    }
++    void root(sessionID).then((session) => {
++      if (meta.disposed || !session) return
++      const hasOpenTab = sessionIDHasOpenTab(tabs.store, input.key, session.id)
++      if (hasOpenTab && settings.sounds.permissionsEnabled()) {
++        void input.coordinator.sound(`${input.key}\0${eventID}`, () => playSoundById(settings.sounds.permissions()))
++      }
++      if (hasOpenTab && settings.notifications.permissions() && !Push.enabled()) {
++        void input.coordinator.system(`${input.key}\0${eventID}`, () =>
++          platform.notify(title, session.title ?? session.id, () =>
++            openNotificationSession(tabs, input.key, session.id),
++          ),
++        )
++      }
++    })
++  }
++
++  // ocelot: Web Push from the server that serves this page.
++  if (Push.origin(input.key)) {
++    createEffect(() => {
++      const kinds = Push.kinds(settings.notifications)
++      void Push.sync(kinds).catch(() => undefined)
++    })
++    onCleanup(Push.presence())
++    onCleanup(Push.onOpen((sessionID) => openNotificationSession(tabs, input.key, sessionID)))
++  }
++
+   const unsub = input.sdk.event.listen((event) => {
++    if (event.type === "permission.asked") {
++      handleAttention(event.data.sessionID, event.id, language.t("notification.session.permission.title"))
++      return
++    }
++    if (event.type === "form.created") {
++      handleAttention(event.data.form.sessionID, event.id, language.t("notification.session.question.title"))
++      return
++    }
+     if (event.type !== "session.execution.succeeded" && event.type !== "session.execution.failed") return
+ 
+     const time = Date.now()
+diff --git a/packages/app/src/shell/notifications/push.ts b/packages/app/src/shell/notifications/push.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ba892443fd8067ae35f98594a88ddbeaa58c1462
+--- /dev/null
++++ b/packages/app/src/shell/notifications/push.ts
+@@ -0,0 +1,179 @@
++import { createSignal } from "solid-js"
++import { ServerConnection } from "@/runtime/server/registry"
++import { sessionHref } from "@/shell/routes/session"
++
++// ocelot: Web Push through the server that serves this page (packages/cli/src/services/web-push.ts).
++// The page's service worker shows the pushes (public/ocelot-push-sw.js). Every open page also reports
++// whether it is in use, so nothing is pushed while you are at one.
++
++export type PushKind = "done" | "permission" | "error"
++export type PushStatus = { readonly subscribed: boolean; readonly delivered?: number; readonly failed?: string }
++
++const API = "/api/ocelot/push"
++/** A focused page counts as in use until this long after the last input. */
++const IDLE = 3 * 60_000
++const HEARTBEAT = 20_000
++
++const [enabled, setEnabled] = createSignal(false)
++
++export const Push = {
++  /** Whether this browser can receive pushes from this page's server (an installed app on iOS). */
++  supported() {
++    return (
++      import.meta.env.PROD &&
++      typeof window !== "undefined" &&
++      "serviceWorker" in navigator &&
++      "PushManager" in window &&
++      "Notification" in window
++    )
++  },
++  /** This device has a push subscription; local system notifications would duplicate it. */
++  enabled,
++  /** What this device is pushed, from its notification settings. */
++  kinds(notifications: { agent(): boolean; permissions(): boolean; errors(): boolean }) {
++    const kinds: PushKind[] = []
++    if (notifications.agent()) kinds.push("done")
++    if (notifications.permissions()) kinds.push("permission")
++    if (notifications.errors()) kinds.push("error")
++    return kinds
++  },
++  /** The server this page talks to for pushes. */
++  origin(key: ServerConnection.Key) {
++    return typeof location !== "undefined" && key === location.origin
++  },
++  async subscription() {
++    if (!Push.supported()) return null
++    const registration = await navigator.serviceWorker.getRegistration()
++    const subscription = (await registration?.pushManager.getSubscription()) ?? null
++    setEnabled(subscription !== null)
++    return subscription
++  },
++  /** Must run from a user gesture: iOS only asks for permission then. */
++  async enable(kinds: PushKind[]) {
++    const permission = await Notification.requestPermission()
++    if (permission !== "granted") return { subscribed: false, failed: permission } satisfies PushStatus
++    const key = await request<{ publicKey: string }>("GET", "")
++    const registration = await navigator.serviceWorker.ready
++    const subscription = await registration.pushManager.subscribe({
++      userVisibleOnly: true,
++      applicationServerKey: decode(key.publicKey),
++    })
++    setEnabled(true)
++    return register(subscription, kinds)
++  },
++  async disable() {
++    const subscription = await Push.subscription()
++    if (subscription === null) return
++    await request("DELETE", "/subscription", { endpoint: subscription.endpoint }).catch(() => undefined)
++    await subscription.unsubscribe()
++    setEnabled(false)
++  },
++  /** Re-registers this device (with its current kinds): repairs a server that forgot it, and reads its status. */
++  async sync(kinds: PushKind[]) {
++    const subscription = await Push.subscription()
++    if (subscription === null) return undefined
++    return register(subscription, kinds)
++  },
++  async test() {
++    const subscription = await Push.subscription()
++    if (subscription === null) return undefined
++    return request<PushStatus>("POST", "/test", { endpoint: subscription.endpoint })
++  },
++  /** Closes this device's notifications for a session you are now looking at. */
++  dismiss(sessionID: string) {
++    if (!Push.supported()) return
++    void navigator.serviceWorker
++      .getRegistration()
++      .then((registration) => registration?.getNotifications({ tag: sessionID }))
++      .then((notifications) => notifications?.forEach((notification) => notification.close()))
++      .catch(() => undefined)
++  },
++  /** Reports whether this page is in use: visible, focused and touched within IDLE. Returns a cleanup. */
++  presence() {
++    const client = crypto.randomUUID()
++    const state = { input: Date.now(), sent: undefined as boolean | undefined, stopped: false }
++    const inUse = () => document.visibilityState === "visible" && document.hasFocus() && Date.now() - state.input < IDLE
++    const send = (active: boolean, force = false) => {
++      if (state.stopped || (!force && state.sent === active && !active)) return
++      state.sent = active
++      void fetch(`${API}/presence`, {
++        method: "POST",
++        credentials: "same-origin",
++        keepalive: true,
++        headers: { "content-type": "application/json" },
++        body: JSON.stringify({ client, active }),
++      })
++        .then((response) => {
++          // Not an ocelot server: nothing to report to.
++          if (response.status === 404) stop()
++        })
++        .catch(() => undefined)
++    }
++    const update = () => send(inUse())
++    const input = () => {
++      const idle = Date.now() - state.input >= IDLE
++      state.input = Date.now()
++      if (idle) update()
++    }
++    const leave = () => send(false, true)
++    const timer = setInterval(update, HEARTBEAT)
++    const inputs = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"] as const
++    inputs.forEach((name) => window.addEventListener(name, input, { passive: true }))
++    window.addEventListener("focus", update)
++    window.addEventListener("blur", update)
++    window.addEventListener("pagehide", leave)
++    document.addEventListener("visibilitychange", update)
++    const stop = () => {
++      state.stopped = true
++      clearInterval(timer)
++      inputs.forEach((name) => window.removeEventListener(name, input))
++      window.removeEventListener("focus", update)
++      window.removeEventListener("blur", update)
++      window.removeEventListener("pagehide", leave)
++      document.removeEventListener("visibilitychange", update)
++    }
++    update()
++    return () => {
++      leave()
++      stop()
++    }
++  },
++  /** Opens sessions for notifications tapped while a page was already open. Returns a cleanup. */
++  onOpen(open: (sessionID: string) => void) {
++    if (!Push.supported()) return () => undefined
++    const listener = (event: MessageEvent) => {
++      const data: unknown = event.data
++      if (typeof data !== "object" || data === null) return
++      if (!("type" in data) || data.type !== "ocelot.push.open") return
++      if ("session" in data && typeof data.session === "string") open(data.session)
++    }
++    navigator.serviceWorker.addEventListener("message", listener)
++    navigator.serviceWorker.startMessages()
++    return () => navigator.serviceWorker.removeEventListener("message", listener)
++  },
++}
++
++function register(subscription: PushSubscription, kinds: PushKind[]) {
++  const json = subscription.toJSON()
++  return request<PushStatus>("PUT", "/subscription", {
++    subscription: { endpoint: subscription.endpoint, keys: json.keys },
++    kinds,
++    href: sessionHref(ServerConnection.Key.make(location.origin), ""),
++  })
++}
++
++async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
++  const response = await fetch(API + path, {
++    method,
++    credentials: "same-origin",
++    headers: body === undefined ? { accept: "application/json" } : { "content-type": "application/json" },
++    body: body === undefined ? undefined : JSON.stringify(body),
++  })
++  if (!response.ok) throw new Error(`${method} ${API}${path}: ${response.status}`)
++  return response.json() as Promise<T>
++}
++
++function decode(value: string) {
++  const base64 = value.replace(/-/g, "+").replace(/_/g, "/")
++  return Uint8Array.from(atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4)), (char) => char.charCodeAt(0))
++}
+diff --git a/packages/app/vite.pwa.ts b/packages/app/vite.pwa.ts
+index 51310b362a1ea32b8169dff8801ae4668d501bf7..a80763fae535702c8cb4b3eb79db3f3a5cd09347 100644
+--- a/packages/app/vite.pwa.ts
++++ b/packages/app/vite.pwa.ts
+@@ -17,6 +17,8 @@ export function serviceWorker(directory: string) {
+       // Keep each open tab on its complete build until all old clients close.
+       skipWaiting: false,
+       inlineWorkboxRuntime: true,
++      // ocelot: Web Push handlers (public/ocelot-push-sw.js).
++      importScripts: ["/ocelot-push-sw.js"],
+       navigateFallback: "/index.html",
+       // Pairing links must reach the server so it can set the session cookie.
+       navigateFallbackDenylist: [/^\/(?:api|auth)(?:\/|$)/, /^\/(?:_assets|assets)(?:\/|$)/],

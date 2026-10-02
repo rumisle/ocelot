@@ -33,3 +33,5 @@ web/timeline-position.patch
 web/working-timer-resync.patch
 core/no-shell-background.patch
 web/session-header-meta.patch
+cli/web-push.patch
+web/push-notifications.patch

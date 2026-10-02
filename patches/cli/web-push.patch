@@ -1,0 +1,443 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 3 Oct 2026 01:48:20 +0800
+Subject: cli/server: Web Push for the web app
+
+The server keeps a VAPID key and the browsers' push subscriptions in
+<data>/web-push.json and serves /api/ocelot/push (key, subscription,
+test, presence). It follows its own event stream and pushes when a
+top-level session finishes (the reply as the body) or fails, or a session
+asks for a permission or an answer (under its top-level session). Every
+open web app reports whether it is in use (visible, focused, touched in
+the last 3 minutes); while one is, nothing is pushed. Payloads are
+encrypted per RFC 8291 and signed per RFC 8292 with node:crypto, no new
+dependency. A 404/410 from the push service drops the subscription.
+
+Nothing is pushed until a browser subscribes. Not for a TUI's private
+stdio server.
+
+Ocelot-Patch: cli/web-push
+
+diff --git a/packages/cli/src/server-process.ts b/packages/cli/src/server-process.ts
+index 755ddbf783f990c0b0cf1b082bcd2962096e509d..d3b580f2b23395d2988c26cb22915ced67162785 100644
+--- a/packages/cli/src/server-process.ts
++++ b/packages/cli/src/server-process.ts
+@@ -16,6 +16,8 @@ import { RetainedImage } from "./services/retained-image"
+ import { ServiceRegistration } from "./services/service-registration"
+ import { WebUi } from "./services/web-ui"
+ import { IdleRestart } from "./services/idle-restart"
++import { WebPush } from "./services/web-push"
++import path from "node:path"
+ import { databasePath } from "./database-path"
+ 
+ export type Mode = "default" | "service" | "stdio"
+@@ -87,7 +89,11 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
+       const webUi = yield* WebUi.handler()
+       // ocelot: the web app's "Update" button (pending restart, restart now).
+       const restart = serviceOptions === undefined ? undefined : yield* IdleRestart.routes(serviceOptions.file, password)
+-      const transform: typeof webUi = restart === undefined ? webUi : (app) => restart(webUi(app))
++      // ocelot: Web Push for the web app (not for a TUI's private stdio server).
++      const pusher = options.mode === "stdio" ? undefined : WebPush.make(path.join(global.data, "web-push.json"))
++      const push = pusher === undefined ? undefined : WebPush.routes(pusher, password)
++      const withRestart: typeof webUi = restart === undefined ? webUi : (app) => restart(webUi(app))
++      const transform: typeof webUi = push === undefined ? withRestart : (app) => push(withRestart(app))
+       const server = yield* start(
+         {
+           app: {
+@@ -166,6 +172,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
+       const url = HttpServer.formatAddress(server.address)
+       console.log(options.mode === "stdio" ? JSON.stringify({ url }) : `server listening on ${url}`)
+       if (foreground && !environmentPassword) console.log(`server password ${password}`)
++      if (pusher !== undefined) WebPush.watch(pusher, url, password)
+       if (serviceOptions !== undefined) yield* IdleRestart.watch(serviceOptions.file)
+       return yield* options.mode === "service"
+         ? server.shutdown
+diff --git a/packages/cli/src/services/web-push.ts b/packages/cli/src/services/web-push.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..37bd458c8ca11d6f3427de830b5589e676f9e900
+--- /dev/null
++++ b/packages/cli/src/services/web-push.ts
+@@ -0,0 +1,383 @@
++export * as WebPush from "./web-push"
++
++import { Service } from "@opencode/client/effect/service"
++import { OpenCode, type OpenCodeEvent } from "@opencode/client/promise"
++import { ServerAuth } from "@opencode/server/auth"
++import { authorizedRequest, unauthorizedResponse } from "@opencode/server/middleware/authorization"
++import {
++  createCipheriv,
++  createECDH,
++  createHmac,
++  createPrivateKey,
++  generateKeyPairSync,
++  randomBytes,
++  sign,
++} from "node:crypto"
++import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
++import { dirname } from "node:path"
++import { Effect, Option, Schema } from "effect"
++import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
++
++// ocelot: Web Push for the web app, mainly an installed PWA on a phone. Browsers subscribe through
++// `/api/ocelot/push/*`; the server watches its own event stream and pushes when a top-level session
++// finishes or fails, or any session asks for a permission or an answer. Every open web app reports
++// whether it is in use (focused), and while one is, nothing is pushed: you are already looking.
++// Payloads are encrypted per RFC 8291 and signed with a VAPID key (RFC 8292), both generated here
++// and kept with the subscriptions in one file. Nothing happens until a browser subscribes.
++
++const Kind = Schema.Literals(["done", "permission", "error"])
++type Kind = typeof Kind.Type
++
++const Keys = Schema.Struct({ p256dh: Schema.String, auth: Schema.String })
++
++const Subscription = Schema.Struct({
++  endpoint: Schema.String,
++  keys: Keys,
++  kinds: Schema.Array(Kind),
++  // The web app's session URL without the session ID, opened when a notification is tapped.
++  href: Schema.String,
++  delivered: Schema.optional(Schema.Number),
++  failed: Schema.optional(Schema.String),
++})
++type Subscription = typeof Subscription.Type
++
++const Store = Schema.Struct({
++  vapid: Schema.Struct({ publicKey: Schema.String, privateKey: Schema.Record(Schema.String, Schema.String) }),
++  subscriptions: Schema.Array(Subscription),
++})
++type Store = typeof Store.Type
++
++const Subscribe = Schema.Struct({
++  subscription: Schema.Struct({ endpoint: Schema.String, keys: Keys }),
++  kinds: Schema.Array(Kind),
++  href: Schema.String,
++})
++const Endpoint = Schema.Struct({ endpoint: Schema.String })
++const Presence = Schema.Struct({ client: Schema.String, active: Schema.Boolean })
++
++const decodeStore = Schema.decodeUnknownOption(Schema.fromJsonString(Store))
++
++/** A client counts as in use for this long after its last report. */
++export const PRESENCE_TTL = 45_000
++const PREVIEW = 140
++
++export type Message = { readonly title: string; readonly body: string; readonly session?: string }
++
++export function make(file: string) {
++  let store = load(file)
++  const presence = new Map<string, number>()
++
++  const save = () => {
++    mkdirSync(dirname(file), { recursive: true })
++    writeFileSync(file + ".tmp", JSON.stringify(store), { mode: 0o600 })
++    renameSync(file + ".tmp", file)
++  }
++  const update = (endpoint: string, change: (subscription: Subscription) => Subscription | undefined) => {
++    store = {
++      ...store,
++      subscriptions: store.subscriptions.flatMap((item) => {
++        if (item.endpoint !== endpoint) return [item]
++        const next = change(item)
++        return next === undefined ? [] : [next]
++      }),
++    }
++    save()
++  }
++  const status = (endpoint: string) => {
++    const found = store.subscriptions.find((item) => item.endpoint === endpoint)
++    return { subscribed: found !== undefined, delivered: found?.delivered, failed: found?.failed }
++  }
++
++  const deliver = async (subscription: Subscription, message: Message) => {
++    const payload = JSON.stringify({
++      title: message.title,
++      body: message.body,
++      session: message.session,
++      url: message.session === undefined ? undefined : subscription.href + message.session,
++    })
++    const response = await fetch(subscription.endpoint, {
++      method: "POST",
++      headers: {
++        authorization: vapid(subscription.endpoint, store.vapid),
++        "content-encoding": "aes128gcm",
++        "content-type": "application/octet-stream",
++        ttl: "86400",
++        urgency: "high",
++        // A newer notification for the same session replaces an undelivered older one.
++        ...(message.session === undefined ? {} : { topic: message.session.slice(-32) }),
++      },
++      body: encrypt(Buffer.from(payload), subscription.keys),
++      signal: AbortSignal.timeout(15_000),
++    }).catch((error: unknown) => error)
++    if (response instanceof Response && response.ok) {
++      update(subscription.endpoint, (item) => ({ ...item, delivered: Date.now(), failed: undefined }))
++      return
++    }
++    // The push service dropped the subscription (app removed, permission revoked): forget it.
++    if (response instanceof Response && (response.status === 404 || response.status === 410)) {
++      update(subscription.endpoint, () => undefined)
++      return
++    }
++    const failed =
++      response instanceof Response
++        ? `${response.status} ${(await response.text().catch(() => "")).slice(0, 200)}`.trim()
++        : String(response)
++    update(subscription.endpoint, (item) => ({ ...item, failed }))
++  }
++
++  const active = () => {
++    const now = Date.now()
++    for (const [client, until] of presence) if (until < now) presence.delete(client)
++    return presence.size > 0
++  }
++
++  return {
++    publicKey() {
++      // A browser subscribes with this key: keep it from now on.
++      if (!existsSync(file)) save()
++      return store.vapid.publicKey
++    },
++    subscribe(input: typeof Subscribe.Type) {
++      const rest = store.subscriptions.filter((item) => item.endpoint !== input.subscription.endpoint)
++      const previous = store.subscriptions.find((item) => item.endpoint === input.subscription.endpoint)
++      store = {
++        ...store,
++        subscriptions: [...rest, { ...previous, ...input.subscription, kinds: input.kinds, href: input.href }],
++      }
++      save()
++      return status(input.subscription.endpoint)
++    },
++    unsubscribe(endpoint: string) {
++      update(endpoint, () => undefined)
++    },
++    status,
++    async test(endpoint: string) {
++      const found = store.subscriptions.find((item) => item.endpoint === endpoint)
++      if (found !== undefined) await deliver(found, { title: "OpenCode", body: "Test notification" })
++      return status(endpoint)
++    },
++    presence(client: string, value: boolean) {
++      if (value) presence.set(client, Date.now() + PRESENCE_TTL)
++      else presence.delete(client)
++    },
++    active,
++    /** Pushes to every subscription that wants this kind, unless some web app is in use. */
++    async push(kind: Kind, message: Message) {
++      if (active()) return
++      await Promise.all(
++        store.subscriptions.filter((item) => item.kinds.includes(kind)).map((item) => deliver(item, message)),
++      )
++    },
++    wanted: () => store.subscriptions.length > 0 && !active(),
++  }
++}
++export type Pusher = ReturnType<typeof make>
++
++export const routes = (pusher: Pusher, password: string) => {
++  const auth: ServerAuth.Info = { password: Option.some(password), username: "opencode" }
++  return <E, R>(app: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
++    Effect.gen(function* () {
++      const incoming = yield* HttpServerRequest.HttpServerRequest
++      const path = new URL(incoming.url, "http://localhost").pathname
++      if (!path.startsWith("/api/ocelot/push")) return yield* app
++      if (!(yield* authorizedRequest(incoming, auth))) return unauthorizedResponse(incoming)
++      const body = <A>(schema: Schema.Codec<A, unknown>) =>
++        incoming.json.pipe(
++          Effect.flatMap((value) => Schema.decodeUnknownEffect(schema)(value)),
++          Effect.option,
++          Effect.map(Option.getOrUndefined),
++        )
++      const invalid = HttpServerResponse.jsonUnsafe({ error: "invalid request" }, { status: 400 })
++      const route = `${incoming.method} ${path}`
++      if (route === "GET /api/ocelot/push") return HttpServerResponse.jsonUnsafe({ publicKey: pusher.publicKey() })
++      if (route === "PUT /api/ocelot/push/subscription") {
++        const input = yield* body(Subscribe)
++        return input === undefined ? invalid : HttpServerResponse.jsonUnsafe(pusher.subscribe(input))
++      }
++      if (route === "DELETE /api/ocelot/push/subscription") {
++        const input = yield* body(Endpoint)
++        if (input === undefined) return invalid
++        pusher.unsubscribe(input.endpoint)
++        return HttpServerResponse.jsonUnsafe(pusher.status(input.endpoint))
++      }
++      if (route === "POST /api/ocelot/push/test") {
++        const input = yield* body(Endpoint)
++        if (input === undefined) return invalid
++        return HttpServerResponse.jsonUnsafe(yield* Effect.promise(() => pusher.test(input.endpoint)))
++      }
++      if (route === "POST /api/ocelot/push/presence") {
++        const input = yield* body(Presence)
++        if (input === undefined) return invalid
++        pusher.presence(input.client, input.active)
++        return HttpServerResponse.empty({ status: 204 })
++      }
++      return HttpServerResponse.empty({ status: 404 })
++    })
++}
++
++/** Follows the server's own event stream for as long as the process lives, reconnecting when it drops. */
++export function watch(pusher: Pusher, url: string, password: string) {
++  const client = OpenCode.make({
++    baseUrl: url,
++    headers: Service.headers({ url, auth: { type: "basic", username: "opencode", password } }),
++  })
++  const session = (sessionID: string) => client.session.get({ sessionID }).catch(() => undefined)
++  const root = async (sessionID: string) => {
++    const found = await session(sessionID)
++    if (found?.parentID === undefined) return found
++    return root(found.parentID)
++  }
++  const title = (info: { title?: string } | undefined) => info?.title || "OpenCode"
++
++  const handle = async (event: OpenCodeEvent) => {
++    if (!pusher.wanted()) return
++    if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") {
++      const info = await session(event.data.sessionID)
++      if (info === undefined || info.parentID !== undefined) return
++      if (event.type === "session.execution.failed")
++        return pusher.push("error", {
++          title: title(info),
++          body: `Failed · ${event.data.error.message}`,
++          session: info.id,
++        })
++      return pusher.push("done", { title: title(info), body: await reply(info.id), session: info.id })
++    }
++    if (event.type === "permission.asked") {
++      const info = await root(event.data.sessionID)
++      const asked = event.data.message ?? `${event.data.action}: ${event.data.resources.join(", ")}`
++      return pusher.push("permission", {
++        title: title(info),
++        body: clip(`Needs permission · ${asked}`),
++        session: info?.id ?? event.data.sessionID,
++      })
++    }
++    if (event.type === "form.created") {
++      const form = event.data.form
++      const info = await root(form.sessionID)
++      const field = form.fields[0]
++      return pusher.push("permission", {
++        title: title(info),
++        body: clip(field.description ?? field.title ?? form.title),
++        session: info?.id ?? form.sessionID,
++      })
++    }
++  }
++
++  const reply = async (sessionID: string) => {
++    const messages = await client.message.list({ sessionID, limit: 20, order: "desc" }).catch(() => undefined)
++    const last = messages?.data.find(
++      (message) => message.type === "assistant" && message.content.some((part) => part.type === "text"),
++    )
++    const text =
++      last?.type === "assistant"
++        ? last.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
++        : ""
++    return clip(plain(text)) || "Done"
++  }
++
++  void (async () => {
++    while (true) {
++      try {
++        for await (const event of client.event.subscribe()) void handle(event).catch(() => undefined)
++      } catch {
++        // Reconnect below.
++      }
++      await new Promise((resolve) => setTimeout(resolve, 2_000))
++    }
++  })()
++}
++
++/** Markdown reduced to the words a notification can show. */
++export function plain(text: string) {
++  return text
++    .replace(/```[^\n]*\n([\s\S]*?)```/g, "$1")
++    .replace(/`([^`]*)`/g, "$1")
++    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
++    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
++    .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)/gm, "")
++    .replace(/(\*\*|__|\*|_|~~)(\S(?:.*?\S)?)\1/g, "$2")
++    .replace(/\s+/g, " ")
++    .trim()
++}
++
++function clip(text: string) {
++  const chars = Array.from(text)
++  return chars.length <= PREVIEW
++    ? text
++    : chars
++        .slice(0, PREVIEW - 1)
++        .join("")
++        .trimEnd() + "…"
++}
++
++function load(file: string): Store {
++  const found = Option.getOrUndefined(
++    decodeStore(
++      (() => {
++        try {
++          return readFileSync(file, "utf8")
++        } catch {
++          return ""
++        }
++      })(),
++    ),
++  )
++  if (found !== undefined) return found
++  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
++  const jwk = privateKey.export({ format: "jwk" })
++  const publicKey = Buffer.concat([
++    Buffer.from([4]),
++    Buffer.from(jwk.x!, "base64url"),
++    Buffer.from(jwk.y!, "base64url"),
++  ]).toString("base64url")
++  return {
++    vapid: {
++      publicKey,
++      privateKey: Object.fromEntries(Object.entries(jwk).map(([key, value]) => [key, String(value)])),
++    },
++    subscriptions: [],
++  }
++}
++
++const hmac = (key: Uint8Array, data: Uint8Array) => createHmac("sha256", key).update(data).digest()
++
++/** RFC 8291 "aes128gcm" content encoding: one record, keyed to the subscription's p256dh and auth. */
++export function encrypt(payload: Uint8Array, keys: { readonly p256dh: string; readonly auth: string }) {
++  const receiver = Buffer.from(keys.p256dh, "base64url")
++  const ecdh = createECDH("prime256v1")
++  const sender = ecdh.generateKeys()
++  const ikm = hmac(
++    hmac(Buffer.from(keys.auth, "base64url"), ecdh.computeSecret(receiver)),
++    Buffer.concat([Buffer.from("WebPush: info\0"), receiver, sender, Buffer.from([1])]),
++  )
++  const salt = randomBytes(16)
++  const prk = hmac(salt, ikm)
++  const key = hmac(prk, Buffer.from("Content-Encoding: aes128gcm\0\x01")).subarray(0, 16)
++  const nonce = hmac(prk, Buffer.from("Content-Encoding: nonce\0\x01")).subarray(0, 12)
++  const cipher = createCipheriv("aes-128-gcm", key, nonce)
++  const sealed = Buffer.concat([
++    cipher.update(Buffer.concat([payload, Buffer.from([2])])),
++    cipher.final(),
++    cipher.getAuthTag(),
++  ])
++  const header = Buffer.alloc(21)
++  salt.copy(header, 0)
++  header.writeUInt32BE(4096, 16)
++  header[20] = sender.length
++  return Buffer.concat([header, sender, sealed])
++}
++
++/** RFC 8292 VAPID authorization for one push service origin. */
++function vapid(endpoint: string, key: Store["vapid"]) {
++  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url")
++  const unsigned = `${encode({ typ: "JWT", alg: "ES256" })}.${encode({
++    aud: new URL(endpoint).origin,
++    exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60,
++    sub: "https://github.com/rumisle/ocelot",
++  })}`
++  const signature = sign("sha256", Buffer.from(unsigned), {
++    key: createPrivateKey({ key: key.privateKey, format: "jwk" }),
++    dsaEncoding: "ieee-p1363",
++  })
++  return `vapid t=${unsigned}.${signature.toString("base64url")}, k=${key.publicKey}`
++}

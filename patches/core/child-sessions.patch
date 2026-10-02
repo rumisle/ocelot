@@ -286,3 +286,28 @@ index 7a2586fb323a441f38a25749e70e1bb67bd00b53..de652bfa92d1b8966e9b9439b42cde01
            }
          }),
        )
+diff --git a/packages/server/test/session-create.test.ts b/packages/server/test/session-create.test.ts
+index 5d7cbfbacba993aa60ea7e61d77f48d6f1904baa..4e2265dc19d992bfc4d47ec09a7a857087fd4b88 100644
+--- a/packages/server/test/session-create.test.ts
++++ b/packages/server/test/session-create.test.ts
+@@ -27,7 +27,10 @@ it.live("creates a child at its parent's location and lists it under the parent"
+         return Schema.decodeUnknownSync(SessionResponse)(await response.json()).data
+       })
+     const parent = yield* create({ title: "Parent" })
+-    const child = yield* create({ parentID: parent.id, title: "Child", location: { directory: "/unused" } })
++    const child = yield* create({ parentID: parent.id, title: "Child" })
++    // ocelot: a location given with parentID wins (an octopi worker in another directory).
++    const elsewhere = yield* create({ parentID: parent.id, title: "Elsewhere", location: { directory: "/elsewhere" } })
++    expect(elsewhere).toMatchObject({ parentID: parent.id, location: { directory: "/elsewhere" } })
+     const response = yield* Effect.promise(() =>
+       handler(new Request(`http://opencode.local/api/session?parentID=${parent.id}`)),
+     )
+@@ -35,7 +38,7 @@ it.live("creates a child at its parent's location and lists it under the parent"
+     const children = Schema.decodeUnknownSync(SessionsResponse)(yield* Effect.promise(() => response.json()))
+ 
+     expect(child).toMatchObject({ parentID: parent.id, location: parent.location })
+-    expect(children.data.map((session) => session.id)).toEqual([child.id])
++    expect(children.data.map((session) => session.id).toSorted()).toEqual([child.id, elsewhere.id].toSorted())
+   }).pipe(Effect.scoped),
+ )
+ 
