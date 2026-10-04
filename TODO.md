@@ -34,9 +34,9 @@ Open:
 - [x] Actions may open PRs (repo setting, for `bump`).
       Note: PRs opened with GITHUB_TOKEN don't trigger `check`; the bump job applies patches itself.
 - [x] Switched over: copied `opencode.db` to `opencode-ocelot.db`; stock service stopped.
-- [x] ocelot service on Tailscale: 100.78.68.89:46624.
+- [x] ocelot service reachable over Tailscale.
 - [x] opencode-octopi finds `service-*.json` by pid.
-- [ ] Try the installer on the Mac (curl download, so no quarantine).
+- [ ] Try the installer on macOS (curl download, so no quarantine).
 - [x] Restart when idle: patch `cli/restart-when-idle`. `ocelot service set restart idle|immediate`
       (default `immediate` = upstream). With `idle`, a new binary at the server's path and a newer
       TUI meeting a busy server restart it once no session has run for 30 s; `service restart
@@ -126,7 +126,7 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       permission · …" / the question / "Failed · …". Also notifies in the browser for permissions
       and questions (upstream had the switch but no code). The TUI reports presence too
       (tui/push-presence: terminal focus + a key in the last 3 min, 2.0.22-3).
-- [x] Push confirmed on the iPhone (home screen app, 2026-10-03): delivery through
+- [x] Push confirmed on iOS (home screen app, 2026-10-03): delivery through
       web.push.apple.com, lock-screen look, and a tap with the app closed opens the session.
 - [x] Home screen app stuck on an old build (2.0.22-4, patch `web/app-update`): a new service
       worker waited for every page to close, which a suspended iOS app never does. Now it checks
