@@ -1,0 +1,123 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sun, 4 Oct 2026 12:12:12 +0800
+Subject: app: offer a reload when a new version is installed
+
+A new build waits until every page of the old one closes, and an app
+installed on the iOS home screen is suspended rather than closed, so it
+kept running the old build. Check for a new one whenever the app comes
+back (at most once a minute), and once it is installed show "A new
+version is ready" with Reload, which hands over to it and reloads every
+page of the old build.
+
+Ocelot-Patch: web/app-update
+
+diff --git a/packages/app/src/runtime/i18n/en.ts b/packages/app/src/runtime/i18n/en.ts
+index 568ffdc948ef243b6ef408ed635f46c67e9dc97f..25d4c355144d1b84bb9a3732b80aa44495799723 100644
+--- a/packages/app/src/runtime/i18n/en.ts
++++ b/packages/app/src/runtime/i18n/en.ts
+@@ -572,6 +572,9 @@ export const dict = {
+   "titlebar.channel.dev": "Dev",
+   "titlebar.channel.beta": "Beta",
+ 
++  "app.update.title": "A new version is ready",
++  "app.update.reload": "Reload",
++
+   "common.closeTab": "Close tab",
+   "common.dismiss": "Dismiss",
+   "common.moreCountSuffix": " (+{{count}} more)",
+diff --git a/packages/app/src/shell/notifications/update.ts b/packages/app/src/shell/notifications/update.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..56ee78bdcd2a765022de3138ba4b0c8782a76bf7
+--- /dev/null
++++ b/packages/app/src/shell/notifications/update.ts
+@@ -0,0 +1,73 @@
++import { onCleanup } from "solid-js"
++import { useLanguage } from "@/runtime/i18n/language"
++import { showToast } from "@/shell/notifications/toast"
++
++// ocelot: a new build waits until every page of the old one closes (skipWaiting: false), and an
++// installed app on iOS is suspended rather than closed, so it never updated. Check again whenever
++// the app comes back, and offer a reload once the new build is installed.
++
++const CHECK_EVERY = 60_000
++
++export function useAppUpdate() {
++  if (!import.meta.env.PROD || typeof window === "undefined" || !("serviceWorker" in navigator)) return
++  const language = useLanguage()
++  let disposed = false
++  let checked = 0
++  let offered: ServiceWorker | undefined
++  let reloading = false
++
++  const offer = (worker: ServiceWorker) => {
++    // A first install has no page to replace.
++    if (disposed || offered === worker || !navigator.serviceWorker.controller) return
++    offered = worker
++    showToast({
++      title: language.t("app.update.title"),
++      persistent: true,
++      actions: [
++        {
++          label: language.t("app.update.reload"),
++          onClick: () => worker.postMessage({ type: "SKIP_WAITING" }),
++        },
++        { label: language.t("common.dismiss"), onClick: "dismiss" },
++      ],
++    })
++  }
++
++  const watch = (registration: ServiceWorkerRegistration) => {
++    if (registration.waiting) offer(registration.waiting)
++    registration.addEventListener("updatefound", () => {
++      const worker = registration.installing
++      worker?.addEventListener("statechange", () => {
++        if (worker.state === "installed") offer(worker)
++      })
++    })
++  }
++
++  const check = () => {
++    if (document.visibilityState !== "visible" || Date.now() - checked < CHECK_EVERY) return
++    checked = Date.now()
++    void navigator.serviceWorker.getRegistration().then((registration) => registration?.update().catch(() => {}))
++  }
++
++  // Every page of the old build reloads once the new one takes over, so none of them asks
++  // for chunks the new cache no longer has.
++  const onControllerChange = () => {
++    if (reloading || !offered) return
++    reloading = true
++    location.reload()
++  }
++
++  void navigator.serviceWorker.ready.then((registration) => {
++    if (!disposed) watch(registration)
++  })
++  checked = Date.now()
++  navigator.serviceWorker.addEventListener("controllerchange", onControllerChange)
++  document.addEventListener("visibilitychange", check)
++  window.addEventListener("focus", check)
++  onCleanup(() => {
++    disposed = true
++    navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange)
++    document.removeEventListener("visibilitychange", check)
++    window.removeEventListener("focus", check)
++  })
++}
+diff --git a/packages/app/src/shell/shell.tsx b/packages/app/src/shell/shell.tsx
+index 99b769587c7290c0580b1062519b8c83646bea0d..5a77cb77bffe42f2f59ca0cc17922a16c0ead3b2 100644
+--- a/packages/app/src/shell/shell.tsx
++++ b/packages/app/src/shell/shell.tsx
+@@ -11,9 +11,11 @@ import { useSettingsSurface } from "@/settings/surface"
+ import { useSettings } from "@/settings/model"
+ import { ExtensionServerCover } from "@/runtime/extension/server-shell"
+ import { ExtensionSlot } from "@/runtime/extension/render"
++import { useAppUpdate } from "@/shell/notifications/update"
+ 
+ export default function Layout(props: ParentProps) {
+   const platform = usePlatform()
++  useAppUpdate()
+   const settings = useSettingsSurface()
+   const preferences = useSettings()
+   const mobile = createMediaQuery("(max-width: 767px)")

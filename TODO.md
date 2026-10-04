@@ -128,6 +128,10 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       (tui/push-presence: terminal focus + a key in the last 3 min, 2.0.22-3).
 - [x] Push confirmed on the iPhone (home screen app, 2026-10-03): delivery through
       web.push.apple.com, lock-screen look, and a tap with the app closed opens the session.
+- [x] Home screen app stuck on an old build (2.0.22-4, patch `web/app-update`): a new service
+      worker waited for every page to close, which a suspended iOS app never does. Now it checks
+      on return to the app (at most once a minute) and offers "A new version is ready · Reload".
+      `ocelot-push-sw.js` is imported with its hash (the server caches it for a year).
 
 ### Plugin UI in the web app
 - [ ] General way for plugins to add UI to the web app (upstream only has TUI plugin slots).

@@ -13,7 +13,7 @@ E=${E:-/tmp/ocelot-dev}
 PORT=${PORT:-4852}
 FAKE=${FAKE:-4851}
 
-stop() { [ -f "$E/tmux" ] && tmux kill-session -t "$(cat "$E/tmux")" 2>/dev/null || true; }
+stop() { [ -f "$E/tmux" ] && tmux -L ocelot-dev kill-session -t "$(cat "$E/tmux")" 2>/dev/null || true; }
 case "${1:-start}" in
   stop) stop; exit 0 ;;
   start) ;;
@@ -49,10 +49,11 @@ session() { A post /api/session -d "{\"title\":\"\${1:-dev}\",\"model\":{\"id\":
 # prompt <session> <text>: send, don't wait
 prompt() { A post "/api/session/\$1/prompt" -d "\$(jq -nc --arg t "\$2" '{text:\$t}')" >/dev/null; }
 EOF
+unset TMUX
 S=pi-ocelot-dev-$(openssl rand -hex 3)
 echo "$S" > "$E/tmux"
-tmux new-session -d -s "$S" -n fake ". $E/env.sh && '$BUN' '$ROOT/test/fake-anthropic.ts' > $E/fake.log 2>&1"
-tmux new-window -t "$S" -n oc ". $E/env.sh && cd $E/work && '$OC' serve --port $PORT > $E/oc.log 2>&1"
+tmux -L ocelot-dev new-session -d -s "$S" -n fake ". $E/env.sh && '$BUN' '$ROOT/test/fake-anthropic.ts' > $E/fake.log 2>&1"
+tmux -L ocelot-dev new-window -t "$S" -n oc ". $E/env.sh && cd $E/work && '$OC' serve --port $PORT > $E/oc.log 2>&1"
 . "$E/env.sh"
 timeout 60 sh -c "until '$OC' api --server '$URL' get /api/session >/dev/null 2>&1; do sleep 0.5; done" ||
   die "server did not start; see $E/oc.log"

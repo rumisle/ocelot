@@ -494,15 +494,31 @@ index 0000000000000000000000000000000000000000..ba892443fd8067ae35f98594a88ddbea
 +  return Uint8Array.from(atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4)), (char) => char.charCodeAt(0))
 +}
 diff --git a/packages/app/vite.pwa.ts b/packages/app/vite.pwa.ts
-index 51310b362a1ea32b8169dff8801ae4668d501bf7..a80763fae535702c8cb4b3eb79db3f3a5cd09347 100644
+index 51310b362a1ea32b8169dff8801ae4668d501bf7..abca8ff675dd41f07f77f58275d1412f83d9e818 100644
 --- a/packages/app/vite.pwa.ts
 +++ b/packages/app/vite.pwa.ts
-@@ -17,6 +17,8 @@ export function serviceWorker(directory: string) {
+@@ -1,4 +1,5 @@
+ import { createHash } from "node:crypto"
++import { readFileSync } from "node:fs"
+ import { readFile } from "node:fs/promises"
+ import { resolve } from "node:path"
+ import { VitePWA } from "vite-plugin-pwa"
+@@ -17,6 +18,9 @@ export function serviceWorker(directory: string) {
        // Keep each open tab on its complete build until all old clients close.
        skipWaiting: false,
        inlineWorkboxRuntime: true,
-+      // ocelot: Web Push handlers (public/ocelot-push-sw.js).
-+      importScripts: ["/ocelot-push-sw.js"],
++      // ocelot: Web Push handlers (public/ocelot-push-sw.js). The server caches it for a year,
++      // so its URL carries its hash.
++      importScripts: [`/ocelot-push-sw.js?v=${pushWorkerHash()}`],
        navigateFallback: "/index.html",
        // Pairing links must reach the server so it can set the session cookie.
        navigateFallbackDenylist: [/^\/(?:api|auth)(?:\/|$)/, /^\/(?:_assets|assets)(?:\/|$)/],
+@@ -42,3 +46,8 @@ export function serviceWorker(directory: string) {
+     },
+   })
+ }
++
++function pushWorkerHash() {
++  const source = readFileSync(new URL("./public/ocelot-push-sw.js", import.meta.url))
++  return createHash("sha256").update(source).digest("hex").slice(0, 12)
++}
