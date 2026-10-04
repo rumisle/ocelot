@@ -295,3 +295,23 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       Next: item 4 step 1.
 11. [x] (patch core/watch-symlinked-dir: watch the real directory, report paths under the link) Config watching fails: `~/.config/opencode` is a symlink (to agent-config) and the
       watcher errors "inotify_add_watch ... Not a directory", so config edits may not reload.
+
+## 6. Browser use / computer use (researched 2026-10-05, UX not decided)
+
+- Upstream has a browser plugin (`opencode.browser`, packages/plugin-browser): 44 Code Mode tools
+  on the server; the browser is a Chromium tab in the Electron app's Review panel, attached over a
+  public RPC (version 4 attach). Tools are hidden unless a desktop attaches, so nothing works from
+  the web app. Most of it is plain CDP; only tab management and screenshots need Electron.
+- Upstream has no computer use (open requests #40782, #48377, #20490).
+- Codex computer use (reverse engineered): the model writes JS against `cua` in an MCP REPL
+  (`cua_repl`). A signed native helper (SkyComputerUseService) holds Accessibility + Screen Recording
+  and serves JSON-RPC over a unix socket. `get_app_state(app)` returns one window's screenshot plus
+  a numbered accessibility tree, and the model acts by element index or coordinates. It works in
+  the background without taking focus: CGEventPostToPid, AX actions, and CGWindowListCreateImage
+  for covered windows; Chromium apps need CDP for move and scroll. Codex's Chrome use is an
+  extension plus a native messaging host.
+- Open clones: iFurySt/open-codex-computer-use (`ocu`; MCP + CLI `ocu call` / `ocu js`;
+  macOS/Linux/Windows; `install-opencode-mcp`), iFurySt/open-browser-use (Chrome extension + CLI),
+  trycua/cua (cua-driver).
+- Cheapest experiment: run `ocu` on the machine to control and call it from the server over a
+  remote shell (or its MCP over stdio). No new code. Stepping in happens at that machine.
