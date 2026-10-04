@@ -132,6 +132,10 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
       worker waited for every page to close, which a suspended iOS app never does. Now it checks
       on return to the app (at most once a minute) and offers "A new version is ready · Reload".
       `ocelot-push-sw.js` is imported with its hash (the server caches it for a year).
+- [x] A file tab whose file is gone (2.0.22-5, patch `web/missing-file`): reading from a missing
+      directory answered 500, and any missing file toasted "Failed to load file" on every visit.
+      Now 404 like a missing file, no toast; the tab stays struck through and loads again once the
+      file is back.
 
 ### Plugin UI in the web app
 - [ ] General way for plugins to add UI to the web app (upstream only has TUI plugin slots).

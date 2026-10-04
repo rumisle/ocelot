@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sun, 4 Oct 2026 14:17:51 +0800
+Subject: files: a file that is gone shows in its tab instead of failing
+
+Reading a file from a directory that no longer exists (a reboot cleared
+/tmp) answered 500 "Directory not found"; answer 404 FileNotFoundError
+like a missing file in an existing directory. And a missing file no
+longer toasts "Failed to load file": its tab already shows it (struck-
+through name, "File not found"), and a tab restored with the session
+toasted on every visit. The tab stays, and loads again once the file is
+back. Other read errors still toast.
+
+Ocelot-Patch: web/missing-file
+
+diff --git a/packages/app/src/workspaces/files/model.tsx b/packages/app/src/workspaces/files/model.tsx
+index 80fe999ad54b03ba54999840b3d963b4170013a4..aac7a62a4ad0299de6bfcfcade5911ac51e778e2 100644
+--- a/packages/app/src/workspaces/files/model.tsx
++++ b/packages/app/src/workspaces/files/model.tsx
+@@ -146,6 +146,9 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
+           draft.content = undefined
+         }),
+       )
++      // ocelot: a missing file shows in its tab (struck-through name, "not found"); a restored tab
++      // whose file is gone would otherwise toast on every visit.
++      if (notFound) return
+       showToast({
+         variant: "error",
+         title: language.t("toast.file.loadFailed.title"),
+diff --git a/packages/server/src/process.ts b/packages/server/src/process.ts
+index a69782fea9fd2c8a5dce903707a3e8effd6be96e..e8aaa9633366cfde40304a58f3d1c3998ad45989 100644
+--- a/packages/server/src/process.ts
++++ b/packages/server/src/process.ts
+@@ -72,6 +72,19 @@ export const apiErrors = (app: App): App =>
+       )
+     }
+     const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
++    // Reading from a directory that is gone (a reboot cleared /tmp) is a missing file, not a failure.
++    if (
++      path.startsWith("/api/fs/read/") &&
++      error instanceof Error &&
++      "_tag" in error &&
++      error._tag === "FileSystem.DirectoryNotFoundError"
++    ) {
++      const file = decodeURIComponent(path.slice(13))
++      return HttpServerResponse.jsonUnsafe(
++        { _tag: "FileNotFoundError", path: file, message: `File not found: ${file}` },
++        { status: 404, headers: response.headers },
++      )
++    }
+     const reason = error instanceof Error ? error.message : error === undefined ? "internal error" : String(error)
+     if (Exit.isFailure(exit)) yield* Effect.logError("request failed", { route, cause: Cause.pretty(exit.cause) })
+     return HttpServerResponse.jsonUnsafe(
