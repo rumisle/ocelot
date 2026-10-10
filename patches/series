@@ -39,3 +39,8 @@ tui/push-presence.patch
 web/keyboard.patch
 web/app-update.patch
 web/missing-file.patch
+core/message-sync.patch
+web/history-sync.patch
+web/timeline-follow.patch
+web/transcript-retry.patch
+web/tab-position.patch

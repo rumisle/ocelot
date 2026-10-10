@@ -1,0 +1,2145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 10 Oct 2026 18:32:31 +0800
+Subject: web/history-sync: delta resync, a history cache, and restoring far
+ back in one request
+
+The client syncs a session with message-sync: a reconnect costs the changes, not the whole loaded
+transcript again. The rules live in client/solid/message-sync.ts (pure, tested directly):
+mergeSync keeps held copies by identity, merges changed ones into their rows, drops what the
+answer leaves out and keeps what arrived by event while the request was out; cacheChange says
+what the cache should hold. A sync and a page load never overlap (one lock per session).
+
+Streamed deltas apply at their offset: duplicates are dropped, a gap refetches the message with
+deltas held meanwhile, block starts already read are not added twice.
+
+The web app keeps each session's newest messages in IndexedDB, so a reload shows the transcript
+and the saved place at once. Every record carries the server's update time and the next sync
+checks it, so another tab or a failed write costs a refetch, never wrong data (per app build,
+15 sessions, 3000 messages each). Older pages reach it with a quiet sync 0.8 s after loading.
+loadUntil brings a place far back in with one request. Transcript reads go ahead of other
+queued requests.
+
+Restoring at first paint exposed races in the restore. A saved place now decides where the
+timeline opens (the hash scroll no longer pins the bottom meanwhile). The restore writes the
+offset itself and follows the row by key until it holds still, instead of TanStack's
+scrollToIndex, which kept steering to an index that a prepended page had turned into another
+row. A place also keeps the next rows on screen: the top row's key can change with what is
+loaded around it (a group of steps cut at a page boundary groups differently once complete), and
+falling back to the turn's start reopened hundreds of pixels off.
+
+Ocelot-Patch: web/history-sync
+
+diff --git a/packages/app/src/runtime/persistence/history-cache.ts b/packages/app/src/runtime/persistence/history-cache.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..20b1c000e34fc000b5f017034a0cc5a3ff889abb
+--- /dev/null
++++ b/packages/app/src/runtime/persistence/history-cache.ts
+@@ -0,0 +1,171 @@
++// ocelot: the history cache (HistoryCache in @opencode/client/solid/data) in IndexedDB.
++//
++// One "meta" record per session (message order, watermark, when it was last used, the app build)
++// and one "message" record per message, keyed [session key, message id], so a sync writes only
++// the messages that changed. Every record carries the server's update time for its copy and the
++// next sync checks it, so nothing here has to be exact: a failed or interleaved write (two tabs)
++// costs a refetch. Entries from another app build are ignored (the message format may differ).
++import type { HistoryCache, HistoryCacheEntry, HistoryCacheRecord } from "@opencode/client/solid"
++
++const database = "ocelot-history"
++// Least recently used sessions beyond this are dropped.
++export const historySessionLimit = 15
++
++type Meta = {
++  key: string
++  scope: string
++  sessionID: string
++  build: string
++  order: string[]
++  watermark: number
++  cursor?: string
++  used: number
++}
++type Stored = HistoryCacheRecord & { id: string }
++
++function request<T>(value: IDBRequest<T>) {
++  return new Promise<T>((resolve, reject) => {
++    value.addEventListener("success", () => resolve(value.result))
++    value.addEventListener("error", () => reject(value.error))
++  })
++}
++
++function done(transaction: IDBTransaction) {
++  return new Promise<void>((resolve, reject) => {
++    transaction.addEventListener("complete", () => resolve())
++    transaction.addEventListener("error", () => reject(transaction.error))
++    transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("aborted")))
++  })
++}
++
++/** The build of the app this page runs (its entry script); a new release starts a new cache. */
++export function appBuild() {
++  const entry = document.querySelector<HTMLScriptElement>('script[type="module"][src]')?.src
++  return entry ? new URL(entry).pathname : "dev"
++}
++
++export function createHistoryCache(input: { scope: string; build: string; factory?: IDBFactory }): HistoryCache {
++  const factory = input.factory ?? globalThis.indexedDB
++  let opened: Promise<IDBDatabase> | undefined
++  const open = () =>
++    (opened ??= new Promise<IDBDatabase>((resolve, reject) => {
++      const opening = factory.open(database, 1)
++      opening.addEventListener("upgradeneeded", () => {
++        const db = opening.result
++        db.createObjectStore("meta", { keyPath: "key" })
++        db.createObjectStore("message")
++      })
++      opening.addEventListener("success", () => {
++        const db = opening.result
++        // Another tab upgrading the schema: let it, and reopen next time.
++        db.addEventListener("versionchange", () => {
++          db.close()
++          opened = undefined
++        })
++        resolve(db)
++      })
++      opening.addEventListener("error", () => {
++        opened = undefined
++        reject(opening.error)
++      })
++      opening.addEventListener("blocked", () => {
++        opened = undefined
++        reject(new Error("history cache blocked by another tab"))
++      })
++    }))
++  // Opened right away: creating the database on first use took ~0.4 s in Chromium, on the path
++  // of the first transcript read.
++  void open().catch(() => undefined)
++  const key = (sessionID: string) => `${input.scope}\u0000${sessionID}`
++  const range = (sessionKey: string) => IDBKeyRange.bound([sessionKey, ""], [sessionKey, "\uffff"])
++
++  const removeSession = (transaction: IDBTransaction, sessionKey: string) => {
++    transaction.objectStore("meta").delete(sessionKey)
++    transaction.objectStore("message").delete(range(sessionKey))
++  }
++
++  // Drops the least recently used sessions over the limit (or `keep` of them, after a quota error).
++  async function evict(keep = historySessionLimit) {
++    const db = await open()
++    const transaction = db.transaction(["meta", "message"], "readwrite")
++    const metas = await request(transaction.objectStore("meta").getAll() as IDBRequest<Meta[]>)
++    metas
++      .toSorted((a, b) => b.used - a.used)
++      .slice(keep)
++      .forEach((meta) => removeSession(transaction, meta.key))
++    await done(transaction)
++  }
++
++  async function write(sessionID: string, change: Parameters<HistoryCache["write"]>[1]) {
++    const db = await open()
++    const sessionKey = key(sessionID)
++    const transaction = db.transaction(["meta", "message"], "readwrite")
++    const messages = transaction.objectStore("message")
++    const existing = (await request(transaction.objectStore("meta").get(sessionKey))) as Meta | undefined
++    // An entry from another build is replaced, not merged.
++    if (existing && existing.build !== input.build) messages.delete(range(sessionKey))
++    for (const id of change.remove) messages.delete([sessionKey, id])
++    for (const record of change.put)
++      messages.put({ id: record.id, u: record.u, m: record.m } satisfies Stored, [sessionKey, record.id])
++    transaction.objectStore("meta").put({
++      key: sessionKey,
++      scope: input.scope,
++      sessionID,
++      build: input.build,
++      order: [...change.order],
++      watermark: change.watermark,
++      cursor: change.cursor,
++      used: Date.now(),
++    } satisfies Meta)
++    await done(transaction)
++    return existing === undefined
++  }
++
++  async function drop(sessionID: string) {
++    const db = await open()
++    const transaction = db.transaction(["meta", "message"], "readwrite")
++    removeSession(transaction, key(sessionID))
++    await done(transaction)
++  }
++
++  return {
++    drop,
++    async read(sessionID) {
++      const db = await open()
++      const sessionKey = key(sessionID)
++      const transaction = db.transaction(["meta", "message"], "readonly")
++      const [meta, stored] = await Promise.all([
++        request(transaction.objectStore("meta").get(sessionKey)) as Promise<Meta | undefined>,
++        request(transaction.objectStore("message").getAll(range(sessionKey))) as Promise<Stored[]>,
++      ])
++      if (!meta) return undefined
++      if (meta.build !== input.build) {
++        void drop(sessionID).catch(() => undefined)
++        return undefined
++      }
++      // Mark it used without holding up the read.
++      void (async () => {
++        const update = db.transaction("meta", "readwrite")
++        update.objectStore("meta").put({ ...meta, used: Date.now() })
++        await done(update)
++      })().catch(() => undefined)
++      const records = new Map<string, HistoryCacheRecord>()
++      for (const record of stored)
++        if (record && typeof record.u === "number" && record.m?.id === record.id)
++          records.set(record.id, { u: record.u, m: record.m })
++      return { order: meta.order, records, watermark: meta.watermark, cursor: meta.cursor } satisfies HistoryCacheEntry
++    },
++    async write(sessionID, change) {
++      let added: boolean
++      try {
++        added = await write(sessionID, change)
++      } catch (error) {
++        if (!(error instanceof DOMException && error.name === "QuotaExceededError")) throw error
++        // Out of space: keep only the few most recent sessions and try once more.
++        await evict(3)
++        added = await write(sessionID, change)
++      }
++      if (added) await evict().catch(() => undefined)
++    },
++  }
++}
+diff --git a/packages/app/src/runtime/server/request-queue.test.ts b/packages/app/src/runtime/server/request-queue.test.ts
+index 6e74c42d48529e99487a8e2f457c4da0d58717d0..089e76ea14f6bb92c6f0a21b2ea7d2bda9e5c5cc 100644
+--- a/packages/app/src/runtime/server/request-queue.test.ts
++++ b/packages/app/src/runtime/server/request-queue.test.ts
+@@ -55,6 +55,40 @@ describe("createRequestQueue", () => {
+     expect(input.queue.inflight()).toBe(0)
+   })
+ 
++  test("ocelot: transcript reads go ahead of other waiting requests, in their own order", async () => {
++    const input = setup({ limit: 1 })
++    const paths = [
++      "/api/project",
++      "/api/agent",
++      "/api/session/ses_a/message-sync",
++      "/api/config",
++      "/api/session/ses_a/message/msg_1",
++      "/api/session/ses_a/message",
++    ]
++    const responses = paths.map((path) => input.queue.fetch(`http://server${path}`))
++    const started: string[] = []
++    for (let index = 0; index < paths.length; index++) {
++      await input.settle()
++      const item = input.pending[index]!
++      started.push(new URL(item.url).pathname)
++      item.resolve()
++    }
++    await Promise.all(responses)
++    expect(started).toEqual([
++      "/api/project",
++      "/api/session/ses_a/message-sync",
++      "/api/session/ses_a/message/msg_1",
++      "/api/session/ses_a/message",
++      "/api/agent",
++      "/api/config",
++    ])
++    // Writes to the same paths are not reordered.
++    const post = input.queue.fetch("http://server/api/session/ses_a/message", { method: "POST" })
++    await input.settle()
++    input.pending.at(-1)!.resolve()
++    await post
++  })
++
+   test("caps concurrent requests and starts queued ones as slots free up", async () => {
+     const input = setup()
+     const responses = ["/api/a", "/api/b", "/api/c"].map((path) => input.queue.fetch(`http://server${path}`))
+diff --git a/packages/app/src/runtime/server/request-queue.ts b/packages/app/src/runtime/server/request-queue.ts
+index 987e619e43b9f5f241b8b3b95f33f4d9770ed923..aefa4b3d13b12a42cdfb036981379d064ad5043b 100644
+--- a/packages/app/src/runtime/server/request-queue.ts
++++ b/packages/app/src/runtime/server/request-queue.ts
+@@ -1,4 +1,4 @@
+-type Entry = { method: string; url: string; at: number; slow: boolean }
++type Entry = { method: string; url: string; at: number; slow: boolean; urgent?: boolean }
+ 
+ // Chromium allows six connections per origin. The event stream holds one for the life of the
+ // connection and health probes use their own fetch, so the app's API calls stay below that or
+@@ -24,6 +24,14 @@ export const requestHeadersTimeoutMs = 60_000
+ // kills the script midway and leaves a registered but half-initialised worktree behind.
+ export const setupRequestHeadersTimeoutMs = 10 * 60_000
+ 
++// ocelot: transcript reads are what the user waits on when a session opens, so they go ahead of
++// the catalog reads a mount fires at the same time (they still wait for a free slot).
++const urgentRequestPath = /^\/api\/session\/[^/]+\/(message|message-sync|message\/[^/]+)$/
++
++export function isUrgentRequest(method: string, pathname: string) {
++  return method === "GET" && urgentRequestPath.test(pathname)
++}
++
+ function isSlowRequest(pathname: string) {
+   return slowRequestPaths.some((path) => pathname === path || pathname.startsWith(`${path}/`))
+ }
+@@ -97,7 +105,9 @@ export function createRequestQueue(input: {
+         inflight.add(entry)
+         resolve()
+       }
+-      waiting.push({ entry, start })
++      const behind = entry.urgent ? waiting.findIndex((item) => !item.entry.urgent) : -1
++      if (behind === -1) waiting.push({ entry, start })
++      else waiting.splice(behind, 0, { entry, start })
+       watcher ??= setTimeout(watch, stallMs)
+     })
+   }
+@@ -108,7 +118,13 @@ export function createRequestQueue(input: {
+       const pathname = new URL(request.url).pathname
+       // The event stream is long-lived; never count it against the request budget.
+       if (pathname === "/api/event") return base(request)
+-      const entry = { method: request.method, url: request.url, at: now(), slow: isSlowRequest(pathname) }
++      const entry = {
++        method: request.method,
++        url: request.url,
++        at: now(),
++        slow: isSlowRequest(pathname),
++        urgent: isUrgentRequest(request.method, pathname),
++      }
+       const queued = acquire(entry)
+       if (queued) await queued
+       if (request.signal.aborted) {
+diff --git a/packages/app/src/runtime/server/runtime.tsx b/packages/app/src/runtime/server/runtime.tsx
+index 1b47d435a01be61829843ff545cef5011df65b85..1beb8e19ae8f9ffd095bec09d1b2e6d3f8eeb4a9 100644
+--- a/packages/app/src/runtime/server/runtime.tsx
++++ b/packages/app/src/runtime/server/runtime.tsx
+@@ -1,4 +1,5 @@
+ import { createSimpleContext } from "@opencode/ui/context"
++import { appBuild, createHistoryCache } from "@/runtime/persistence/history-cache"
+ import { Accessor, batch, createEffect, createMemo, createResource, createRoot, getOwner } from "solid-js"
+ import { createServerProjects, RECENTLY_CLOSED_DISPLAY_LIMIT, ServerConnection, useServers } from "./registry"
+ import { pathKey } from "@/workspaces/path-key"
+@@ -131,6 +132,16 @@ function createGlobalModels() {
+   }
+ }
+ 
++// ocelot: one per server; none where IndexedDB is unavailable (private modes, tests).
++function historyCacheFor(scope: string) {
++  if (typeof indexedDB === "undefined" || typeof document === "undefined") return undefined
++  try {
++    return createHistoryCache({ scope, build: appBuild() })
++  } catch {
++    return undefined
++  }
++}
++
+ function createServerController(
+   conn: ServerConnection.Any,
+   scope: ServerScope,
+@@ -143,6 +154,8 @@ function createServerController(
+   const sdk = createServerSdkContext(conn, scope)
+   const source = createData({
+     api: () => sdk.api,
++    // ocelot: keep each session's newest messages in IndexedDB, so a reload shows them at once.
++    historyCache: historyCacheFor(connKey),
+     initialMessageLimit: () => (timelinePreset(settings.general.timelineDetail())?.id === "compact" ? 40 : 20),
+     event: {
+       on: sdk.event.on,
+diff --git a/packages/app/src/session/timeline/interaction.ts b/packages/app/src/session/timeline/interaction.ts
+index 02c910e81bdf7f1b0b404bc6481617b5b26ff629..4435151cb1fd470479b326cb9aa87fa99598bdc4 100644
+--- a/packages/app/src/session/timeline/interaction.ts
++++ b/packages/app/src/session/timeline/interaction.ts
+@@ -56,9 +56,15 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+   let restoringUntil = 0
+   let saveTimer: ReturnType<typeof setTimeout> | undefined
+   let restorePages = 0
++  // ocelot: the first attempt loads everything down to the saved turn in one request.
++  let restoreJumped = false
+   // Bumped after each page this restore loads; `loadOlder` keeps its request guard until after the
+   // page is published, so re-running on the message change alone would find it still busy.
+   const [restoreTick, setRestoreTick] = createSignal(0)
++  const restoringPlace = () => {
++    const key = session.identity.sessionKey()
++    return performance.now() < restoringUntil || (!restored.has(key) && readPosition(key) !== undefined)
++  }
+   const savePosition = () => {
+     clearTimeout(saveTimer)
+     const key = session.identity.sessionKey()
+@@ -91,9 +97,21 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+     }
+     restoreTick()
+     if (!timeline.messages().some((message) => message.id === target.turn)) {
+-      // Load older pages until the turn is in, then restore; give up at the start of history.
+-      if (!timeline.history.more() || restorePages >= 100) return void restored.add(key)
+       if (timeline.history.loading()) return
++      if (!restoreJumped) {
++        restoreJumped = true
++        void timeline.history
++          .loadUntil(target.turn)
++          .catch(() => false)
++          .finally(() => setRestoreTick((value) => value + 1))
++        return
++      }
++      // Load older pages until the turn is in, then restore; give up at the start of history.
++      if (!timeline.history.more() || restorePages >= 100) {
++        restorePages = 0
++        restoreJumped = false
++        return void restored.add(key)
++      }
+       restorePages += 1
+       void timeline.history
+         .loadOlder()
+@@ -103,6 +121,7 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+     }
+     restored.add(key)
+     restorePages = 0
++    restoreJumped = false
+     restoringUntil = performance.now() + 1_500
+     requestAnimationFrame(() => {
+       setState("follow", { sessionKey: key, pinned: false })
+@@ -198,6 +217,10 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+     follow: {
+       unpin,
+       toBottom: () => {
++        // ocelot: a saved place (being) restored decides where the timeline opens, not the default
++        // bottom. Otherwise the two race when the transcript is ready at first paint (history
++        // cache): pinned again after the restore, the next layout change scrolled to the end.
++        if (restoringPlace()) return
+         pin()
+         scrollToEnd()
+       },
+diff --git a/packages/app/src/session/timeline/model.ts b/packages/app/src/session/timeline/model.ts
+index 496415631d787007f241da86c5957126f47d1112..0663730b2deac72c9ef5c0184dda5e6d3460580d 100644
+--- a/packages/app/src/session/timeline/model.ts
++++ b/packages/app/src/session/timeline/model.ts
+@@ -56,8 +56,14 @@ export function createTimelineModel(input: { session: Pick<SessionModel, "identi
+     })
+   }
+ 
++  // ocelot: everything from a message far back to the newest in one request (restoring a place).
++  const loadUntil = (messageID: string) => {
++    const id = input.session.identity.sessionID()
++    return id ? data.session.message.loadUntil(id, messageID) : Promise.resolve(false)
++  }
++
+   return {
+-    history: { loadOlder, loading, more },
++    history: { loadOlder, loadUntil, loading, more },
+     lastUserMessage: input.session.history.lastUserMessage,
+     messages: input.session.history.messages,
+     ready,
+diff --git a/packages/app/src/session/timeline/position-memory.ts b/packages/app/src/session/timeline/position-memory.ts
+index ed10eee25dea1e9e6a98f45c5e2793a86b3553a6..26229db03486cd2ae276de3df741b8ffa8df529e 100644
+--- a/packages/app/src/session/timeline/position-memory.ts
++++ b/packages/app/src/session/timeline/position-memory.ts
+@@ -6,11 +6,16 @@
+  * message as a fallback when the row is gone, e.g. regrouped by another timeline preset) and how
+  * far the viewport's top sits below that row's top. A timeline that follows the newest content
+  * has no entry: it reopens at the bottom.
++ *
++ * ocelot (patch web/history-sync): the next rows on screen are kept too. A row's key can change
++ * with what is loaded around it (a collapsed group of steps is keyed by its first part, and a turn
++ * cut at a page boundary groups differently once complete); the rows below it usually keep theirs.
+  */
+ export type TimelinePosition = {
+   readonly key: string
+   readonly turn: string
+   readonly offset: number
++  readonly also?: readonly (readonly [key: string, offset: number])[]
+ }
+ 
+ const storageKey = "ocelot.timeline.position.v1"
+@@ -31,7 +36,10 @@ export function readPosition(sessionKey: string): TimelinePosition | undefined {
+   const entry = load()[sessionKey]
+   if (!entry || typeof entry.key !== "string" || typeof entry.turn !== "string" || !Number.isFinite(entry.offset))
+     return undefined
+-  return { key: entry.key, turn: entry.turn, offset: entry.offset }
++  const also = Array.isArray(entry.also)
++    ? entry.also.filter((item) => typeof item?.[0] === "string" && Number.isFinite(item?.[1]))
++    : undefined
++  return { key: entry.key, turn: entry.turn, offset: entry.offset, also }
+ }
+ 
+ /** Saves a position, or forgets it (`undefined`: the timeline is at the bottom). */
+@@ -42,7 +50,12 @@ export function writePosition(sessionKey: string, position: TimelinePosition | u
+       if (!(sessionKey in stored)) return
+       delete stored[sessionKey]
+     } else {
+-      stored[sessionKey] = { ...position, offset: Math.round(position.offset), at: Date.now() }
++      stored[sessionKey] = {
++        ...position,
++        offset: Math.round(position.offset),
++        also: position.also?.map(([key, offset]) => [key, Math.round(offset)] as const),
++        at: Date.now(),
++      }
+       const keys = Object.keys(stored)
+       if (keys.length > limit)
+         keys
+diff --git a/packages/app/src/session/timeline/virtualizer.tsx b/packages/app/src/session/timeline/virtualizer.tsx
+index 3aab22cb99a1755066a6a710f9429417ef604a57..508ed5c8e524fb6459ff9cc6e008137f0adc9399 100644
+--- a/packages/app/src/session/timeline/virtualizer.tsx
++++ b/packages/app/src/session/timeline/virtualizer.tsx
+@@ -435,36 +435,59 @@ export function createTimelineVirtualizer(input: Input) {
+     const root = listRoot()
+     if (!active() || !root || !virtualContent) return undefined
+     const line = root.getBoundingClientRect().top + topOffset()
+-    let best: { element: HTMLElement; top: number } | undefined
++    const visible: { key: string; top: number }[] = []
+     for (const element of virtualContent.querySelectorAll<HTMLElement>("[data-timeline-key]")) {
+       const rect = element.getBoundingClientRect()
+-      if (rect.height === 0 || rect.bottom <= line + 1) continue
+-      if (!best || rect.top < best.top) best = { element, top: rect.top }
++      const key = element.dataset.timelineKey
++      if (!key || rect.height === 0 || rect.bottom <= line + 1 || rect.top > line + root.clientHeight) continue
++      visible.push({ key, top: rect.top })
++    }
++    visible.sort((a, b) => a.top - b.top)
++    const row = visible[0] ? rowByKey().get(visible[0].key) : undefined
++    if (!row) return undefined
++    return {
++      key: visible[0]!.key,
++      turn: row.userMessageID,
++      offset: line - visible[0]!.top,
++      also: visible.slice(1, 6).map((item) => [item.key, line - item.top] as const),
+     }
+-    const key = best?.element.dataset.timelineKey
+-    const row = key ? rowByKey().get(key) : undefined
+-    if (!best || !key || !row) return undefined
+-    return { key, turn: row.userMessageID, offset: line - best.top }
+   }
+ 
+   // Scrolls the saved row (or its turn's first row) to the top, then corrects against real
+   // layout for a few frames while rows around it mount and measure.
+   function restorePosition(position: TimelinePosition) {
+-    const exact = rows().findIndex((row) => TimelineRow.key(row) === position.key)
+-    const index = exact >= 0 ? exact : input.projection.messageRowIndex().get(position.turn)
++    const keys = rowKeys()
++    const anchor = [[position.key, position.offset] as const, ...(position.also ?? [])].find(
++      ([key]) => keys.indexOf(key) >= 0,
++    )
++    const index = anchor ? keys.indexOf(anchor[0]) : input.projection.messageRowIndex().get(position.turn)
+     if (index === undefined || !rows()[index]) return false
+     const key = TimelineRow.key(rows()[index]!)
+-    const offset = exact >= 0 ? position.offset : 0
++    const offset = anchor ? anchor[1] : 0
+     prepareNavigation()
+-    virtualizer.scrollToIndex(index, { align: "start" })
++    // Written directly and refined against the DOM below, not through scrollToIndex: TanStack keeps
++    // steering to an index target until sizes settle (up to 5 s), and an older page prepended
++    // meanwhile turns that index into another row, so the view jumped by the page's height. The
++    // row is followed by key until it holds still: rows above are measured (and pages prepended)
++    // while it settles, which is when the place is restored from the history cache.
++    const toRow = () => {
++      const root = listRoot()
++      const current = rowKeys().indexOf(key)
++      const start = current >= 0 ? virtualizer.getOffsetForIndex(current, "start")?.[0] : undefined
++      if (root && start !== undefined) root.scrollTop = start
++      return current >= 0
++    }
++    toRow()
+     let frames = 0
+     let stable = 0
+     const refine = () => {
+       const root = listRoot()
+       if (!active() || !root) return
+       const element = virtualContent?.querySelector<HTMLElement>(`[data-timeline-key="${CSS.escape(key)}"]`)
+-      if (!element) virtualizer.scrollToIndex(index, { align: "start" })
+-      else {
++      if (!element) {
++        if (!toRow()) return
++        stable = 0
++      } else {
+         const line = root.getBoundingClientRect().top + topOffset()
+         const delta = element.getBoundingClientRect().top - (line - offset)
+         if (Math.abs(delta) > 1) {
+@@ -472,7 +495,7 @@ export function createTimelineVirtualizer(input: Input) {
+           stable = 0
+         } else stable++
+       }
+-      if (stable < 3 && ++frames < 60) requestAnimationFrame(refine)
++      if (stable < 3 && ++frames < 90) requestAnimationFrame(refine)
+     }
+     requestAnimationFrame(refine)
+     return true
+diff --git a/packages/client/src/solid/data.ts b/packages/client/src/solid/data.ts
+index 03243684a410721debed340be0978ba72f987e82..c7a5b1928771ab96249eb4f9dc4ac79a98bbdb72 100644
+--- a/packages/client/src/solid/data.ts
++++ b/packages/client/src/solid/data.ts
+@@ -43,12 +43,15 @@ import { Worktree } from "@opencode/schema/worktree"
+ import { SessionID } from "@opencode/schema/session-id"
+ import { SessionMessage } from "@opencode/schema/session-message"
+ import {
++  ClientError,
+   isFormAlreadySettledError,
+   isFormNotFoundError,
+   isPermissionNotFoundError,
++  isSessionNotFoundError,
+   type SessionPromptInput,
+ } from "../promise"
+-import { createStore, produce, reconcile } from "solid-js/store"
++import { createStore, produce, reconcile, unwrap } from "solid-js/store"
++import { applyDelta, blockAt, cacheChange, mergeSync, type Merged } from "./message-sync"
+ import type { SessionInbox } from "@opencode/schema/session-inbox"
+ import { batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+ 
+@@ -72,6 +75,37 @@ export type CreateDataInput = {
+   }
+   /** Receives failed event-driven reads. Explicit reads still reject to their caller. */
+   readonly onError?: (error: unknown) => void
++  /** ocelot: a local copy of each session's newest messages (the web app keeps one in IndexedDB). */
++  readonly historyCache?: HistoryCache
++}
++
++/**
++ * ocelot: a local copy of each session's newest messages, so a reload shows the transcript (and
++ * the place the user scrolled back to) before the server answers. Every record carries the
++ * server's `updated` time for the copy, and the next sync checks each one against the server's,
++ * so a stale or partial cache (another tab, an interrupted write) costs a refetch, never wrong data.
++ */
++export type HistoryCache = {
++  read(sessionID: string): Promise<HistoryCacheEntry | undefined>
++  write(sessionID: string, change: HistoryCacheChange): Promise<void>
++  drop(sessionID: string): Promise<void>
++}
++export type HistoryCacheRecord = { readonly u: number; readonly m: SessionMessageInfo }
++export type HistoryCacheEntry = {
++  /** Message ids oldest first as of the last write; ids without a record are skipped. */
++  readonly order: readonly string[]
++  readonly records: ReadonlyMap<string, HistoryCacheRecord>
++  /** The server time of the sync the entry was written after. */
++  readonly watermark: number
++  /** session.message.list cursor for what is older than `order`. */
++  readonly cursor?: string
++}
++export type HistoryCacheChange = {
++  readonly order: readonly string[]
++  readonly watermark: number
++  readonly cursor?: string
++  readonly put: readonly (HistoryCacheRecord & { readonly id: string })[]
++  readonly remove: readonly string[]
+ }
+ 
+ const messageIDFromEvent = (eventID: string) => eventID.replace(/^evt_/, "msg_")
+@@ -547,6 +581,7 @@ export function createData(config: CreateDataInput) {
+ 
+   function evictSession(sessionID: string) {
+     if (sessionOutbox.has(sessionID)) return
++    forget(sessionID)
+     sync.invalidate(`session.pending:${sessionID}`)
+     sync.invalidate(`session.message:${sessionID}`)
+     messageLoads.delete(sessionID)
+@@ -570,6 +605,7 @@ export function createData(config: CreateDataInput) {
+ 
+   function removeSession(sessionID: string) {
+     activeUpdates?.set(sessionID, undefined)
++    forget(sessionID, { drop: true })
+     store.session.pending[sessionID]?.forEach((item) => outbox.delete(item.id))
+     messageIndex.delete(sessionID)
+     sync.invalidate(`session:${sessionID}`)
+@@ -600,6 +636,310 @@ export function createData(config: CreateDataInput) {
+     )
+   }
+ 
++  // ---- ocelot (patch web/history-sync): streamed deltas, message sync, history cache ----
++
++  // Deltas carry their offset (core/session/live-content.ts). A read and the event stream travel
++  // separately, so a delta can arrive before or after a read that includes it; the offset drops
++  // the overlap. A gap refetches the message, and deltas arriving meanwhile are held and replayed on
++  // the fresh copy. If the fresh copy still leaves a gap, what arrives is shown anyway.
++  type Delta = { kind: "text" | "reasoning"; ordinal: number; delta: string; offset?: number }
++  const refetching = new Map<string, Delta[]>()
++
++  function streamDelta(sessionID: string, messageID: string, input: Delta, refetched = false) {
++    const held = refetching.get(messageID)
++    if (held) return void held.push(input)
++    let gap = false
++    message.editAssistant(sessionID, messageID, (assistant) => {
++      const block =
++        input.offset === undefined
++          ? assistant.content.findLast(
++              (item): item is SessionMessageAssistantText | SessionMessageAssistantReasoning =>
++                item.type === input.kind && (item.type === "text" || !item.time?.completed),
++            )
++          : blockAt(assistant, input.kind, input.ordinal)
++      if (!block) gap = input.offset !== undefined
++      else if (!applyDelta(block, input.delta, input.offset)) {
++        if (refetched) block.text += input.delta
++        else gap = true
++      }
++    })
++    if (!gap) return
++    const queue = [input]
++    refetching.set(messageID, queue)
++    void api()
++      .session.message.get({ sessionID, messageID })
++      .then((item) =>
++        message.update(sessionID, (draft, index) => {
++          const position = index.get(item.id)
++          if (position !== undefined) draft[position] = item
++        }),
++      )
++      .catch(() => undefined)
++      .finally(() => {
++        refetching.delete(messageID)
++        batch(() => queue.forEach((held) => streamDelta(sessionID, messageID, held, true)))
++      })
++  }
++
++  // A sync names the oldest message held and the watermark of the last sync; the server lists every
++  // message from there with its update time and sends only what changed (core/session/store.ts).
++  type SyncAnswerOf = Awaited<ReturnType<OpenCodeClient["message"]["sync"]>>
++  type Synced = {
++    watermark: number
++    /** What the history cache holds: update time per message. */
++    persisted: Map<string, number>
++    /** Copies shown from the cache: they count only if the server's update time matches. */
++    verify?: Map<string, number>
++  }
++  const synced = new Map<string, Synced>()
++  const syncLocks = new Map<string, Promise<unknown>>()
++  const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
++  const cacheLimit = 3000
++  const cacheReadTimeout = 300
++  let syncFailures = 0
++
++  // One sync or page load per session at a time, so a page never lands in the middle of a merge.
++  function locked<T>(sessionID: string, run: () => Promise<T>): Promise<T> {
++    const next = (syncLocks.get(sessionID) ?? Promise.resolve()).catch(() => undefined).then(run)
++    syncLocks.set(sessionID, next)
++    const release = () => {
++      if (syncLocks.get(sessionID) === next) syncLocks.delete(sessionID)
++    }
++    next.then(release, release)
++    return next
++  }
++
++  // Rows only this client has: unacknowledged submissions and admitted inputs.
++  function localIDs(sessionID: string) {
++    const ids = new Set<string>()
++    for (const item of store.session.message[sessionID] ?? []) if (outbox.has(item.id)) ids.add(item.id)
++    for (const item of store.session.pending[sessionID] ?? [])
++      if (item.type === "user" || item.type === "synthetic") ids.add(item.id)
++    return ids
++  }
++
++  function held(sessionID: string) {
++    const local = localIDs(sessionID)
++    return unwrap(store.session.message[sessionID] ?? []).filter((item) => !local.has(item.id))
++  }
++
++  // In place: one splice over the part that differs, then changed messages merged into their rows.
++  // A new array would read as a new transcript to the timeline (it lets go of a restored place).
++  function publishSynced(sessionID: string, merged: Merged, cursor: string | undefined) {
++    const listed = new Set(merged.messages.map((item) => item.id))
++    const local = localIDs(sessionID)
++    const messages = [
++      ...merged.messages,
++      ...unwrap(store.session.message[sessionID] ?? []).filter((item) => local.has(item.id) && !listed.has(item.id)),
++    ]
++    batch(() => {
++      messageIndex.set(sessionID, new Map(messages.map((item, position) => [item.id, position])))
++      setStore(
++        "session",
++        "message",
++        produce((draft) => {
++          const target = draft[sessionID]
++          if (!target) return void (draft[sessionID] = messages)
++          let start = 0
++          while (start < target.length && start < messages.length && unwrap(target[start]) === messages[start]) start++
++          let end = target.length
++          let next = messages.length
++          while (end > start && next > start && unwrap(target[end - 1]) === messages[next - 1]) (end--, next--)
++          if (end > start || next > start) target.splice(start, end - start, ...messages.slice(start, next))
++        }),
++      )
++      merged.changed.forEach((item, id) => {
++        const position = messageIndex.get(sessionID)?.get(id)
++        if (position !== undefined) setStore("session", "message", sessionID, position, reconcile(item))
++      })
++      setStore("session", "messageCursor", sessionID, cursor)
++    })
++  }
++
++  async function syncMessages(sessionID: string) {
++    if (syncFailures < 3)
++      try {
++        await locked(sessionID, () => syncDelta(sessionID))
++        syncFailures = 0
++        return
++      } catch (error) {
++        if (isSessionNotFoundError(error)) throw error
++        if (error instanceof ClientError && error.reason === "Transport") throw error
++        if (error instanceof Error && error.name === "AbortError") throw error
++        // An older server without the route, or a fault in it: read the transcript the old way.
++        syncFailures++
++        console.warn("[ocelot] message sync failed, reading the transcript in full", error)
++      }
++    await syncFull(sessionID)
++  }
++
++  /** Brings the transcript up to date; with `until`, from that message on. False when it is gone. */
++  async function syncDelta(sessionID: string, until?: string): Promise<boolean> {
++    let state = synced.get(sessionID) ?? (await showCached(sessionID))
++    let fresh = false
++    let full = state === undefined
++    let include: string[] | undefined
++    for (let attempt = 0; attempt < 3; attempt++) {
++      const oldest = fresh ? undefined : held(sessionID)[0]?.id
++      const from = until ?? oldest
++      const sent = new Set((store.session.message[sessionID] ?? []).map((item) => item.id))
++      const answer = await api().message.sync(
++        from
++          ? {
++              sessionID,
++              from,
++              since: full ? undefined : state?.watermark,
++              include: include?.join(","),
++              held: until ? oldest : undefined,
++            }
++          : { sessionID, limit: config.initialMessageLimit?.() ?? messagePageLimit },
++      )
++      if (answer.reset) {
++        if (until) return false
++        // What we held is gone (reverted, or switched to another branch elsewhere): start over.
++        forget(sessionID, { drop: true })
++        state = undefined
++        fresh = full = true
++        continue
++      }
++      const merged = mergeSync({
++        held: unwrap(store.session.message[sessionID] ?? []),
++        sent,
++        local: localIDs(sessionID),
++        answer,
++        verify: state?.verify,
++      })
++      if ("missing" in merged) {
++        if (attempt === 0 && merged.missing.length <= 200) include = merged.missing
++        else full = true
++        continue
++      }
++      // Recorded before publishing: effects run inside the store update and may sync again.
++      const next: Synced = { watermark: answer.watermark, persisted: state?.persisted ?? new Map() }
++      synced.set(sessionID, next)
++      publishSynced(sessionID, merged, answer.cursor.next ?? undefined)
++      persist(sessionID, next, answer, merged)
++      return true
++    }
++    throw new Error("message sync: no usable answer")
++  }
++
++  // The cached copy, shown at once; the sync that follows checks every message of it.
++  async function showCached(sessionID: string): Promise<Synced | undefined> {
++    const cache = config.historyCache
++    if (!cache || held(sessionID).length > 0) return undefined
++    // A slow cache (a busy disk, another tab's transaction) must not hold up the server read.
++    const entry = await Promise.race([
++      cache.read(sessionID).catch(() => undefined),
++      new Promise<undefined>((resolve) => setTimeout(resolve, cacheReadTimeout)),
++    ])
++    if (!entry || held(sessionID).length > 0) return synced.get(sessionID)
++    const verify = new Map<string, number>()
++    const messages = entry.order.flatMap((id) => {
++      const record = entry.records.get(id)
++      if (record?.m.id !== id) return []
++      verify.set(id, record.u)
++      return [record.m]
++    })
++    if (messages.length === 0) return undefined
++    const state: Synced = { watermark: entry.watermark, persisted: new Map(verify), verify }
++    synced.set(sessionID, state)
++    publishSynced(sessionID, { messages, changed: new Map() }, entry.cursor)
++    return state
++  }
++
++  function persist(sessionID: string, state: Synced, answer: SyncAnswerOf, merged: Merged) {
++    const cache = config.historyCache
++    if (!cache) return
++    const data = new Map(answer.data.map((item) => [item.id, item as SessionMessageInfo]))
++    const copies = new Map(merged.messages.map((item) => [item.id, item]))
++    const change = cacheChange({
++      ids: answer.ids,
++      updated: answer.updated,
++      version: (id) => data.get(id) ?? copies.get(id)!,
++      persisted: state.persisted,
++      limit: cacheLimit,
++    })
++    if (change.put.length === 0 && change.remove.length === 0 && state.persisted.size > 0) return
++    state.persisted = change.wanted
++    void cache
++      .write(sessionID, {
++        order: change.order,
++        watermark: answer.watermark,
++        // Only right when the cache starts where the answer does.
++        cursor: answer.ids.length <= cacheLimit ? (answer.cursor.next ?? undefined) : undefined,
++        put: change.put.map((record) => ({ ...record, m: structuredClone(unwrap(record.m)) })),
++        remove: change.remove,
++      })
++      .catch((error) => {
++        // What the cache holds is unknown now: drop it and write everything next time.
++        console.warn("[ocelot] history cache write failed", error)
++        state.persisted = new Map()
++        void cache.drop(sessionID).catch(() => undefined)
++      })
++  }
++
++  // Older pages loaded by scrolling reach the cache with a quiet sync shortly after.
++  function refreshLater(sessionID: string) {
++    if (!config.historyCache || !synced.has(sessionID)) return
++    clearTimeout(refreshTimers.get(sessionID))
++    refreshTimers.set(
++      sessionID,
++      setTimeout(() => {
++        refreshTimers.delete(sessionID)
++        if (!synced.has(sessionID) || (config.connection && config.connection.status() !== "connected")) return
++        void locked(sessionID, () => syncDelta(sessionID)).catch(() => undefined)
++      }, 800),
++    )
++  }
++
++  function forget(sessionID: string, options?: { drop?: boolean }) {
++    synced.delete(sessionID)
++    clearTimeout(refreshTimers.get(sessionID))
++    refreshTimers.delete(sessionID)
++    if (options?.drop) void config.historyCache?.drop(sessionID).catch(() => undefined)
++  }
++
++  async function syncFull(sessionID: string) {
++    forget(sessionID)
++    const response = await api().message.list({
++      sessionID,
++      limit: config.initialMessageLimit?.() ?? messagePageLimit,
++      order: "desc",
++    })
++    // ocelot: a resync (reconnect, returning to the app, a branch switch) refetches down to
++    // the oldest message already loaded instead of keeping only the newest page, so older
++    // pages the user scrolled back to stay loaded and the scroll position holds. Stops once
++    // that message is reached, or a page past the loaded depth if it no longer exists.
++    const loaded = store.session.message[sessionID] ?? []
++    const oldest = loaded.find((item) => !outbox.has(item.id))?.id
++    const known = new Set(loaded.map((item) => item.id))
++    const pages = [...response.data]
++    let cursor = response.cursor.next ?? undefined
++    if (oldest !== undefined && loaded.length > pages.length)
++      while (cursor && !pages.some((item) => item.id === oldest) && pages.length < loaded.length + 200) {
++        // Ask for exactly the depth still missing (new messages push it down) so nothing
++        // older than what was loaded lands above the user's scroll position.
++        const added = pages.filter((item) => !known.has(item.id)).length
++        const limit = Math.min(200, Math.max(1, loaded.length + added - pages.length))
++        const page = await api().message.list({ sessionID, limit, cursor })
++        pages.push(...page.data)
++        cursor = page.cursor.next ?? undefined
++      }
++    const fetched = pages.toReversed()
++    const ids = new Set(fetched.map((item) => item.id))
++    const local = localIDs(sessionID)
++    const messages = [
++      ...fetched,
++      ...(store.session.message[sessionID] ?? []).filter((item) => !ids.has(item.id) && local.has(item.id)),
++    ]
++    batch(() => {
++      messageIndex.set(sessionID, new Map(messages.map((item, index) => [item.id, index])))
++      setStore("session", "message", sessionID, reconcile(messages))
++      setStore("session", "messageCursor", sessionID, cursor)
++    })
++  }
++
+   function handleEvent(event: OpenCodeEvent) {
+     switch (event.type) {
+       case "server.connected": {
+@@ -940,17 +1280,20 @@ export function createData(config: CreateDataInput) {
+         return
+       case "session.text.started":
+         message.editAssistant(event.data.sessionID, event.data.assistantMessageID, (assistant) => {
++          // ocelot: a read that raced this event may already hold the block.
++          if (blockAt(assistant, "text", event.data.ordinal)) return
+           assistant.content.push({ type: "text", text: "" })
+         })
+         return
+       case "session.text.delta":
+-        message.editText(event.data.sessionID, event.data.assistantMessageID, (text) => {
+-          text.text += event.data.delta
+-        })
++        streamDelta(event.data.sessionID, event.data.assistantMessageID, { kind: "text", ...event.data })
+         return
+       case "session.text.ended":
+-        message.editText(event.data.sessionID, event.data.assistantMessageID, (text) => {
+-          text.text = event.data.text
++        message.editAssistant(event.data.sessionID, event.data.assistantMessageID, (assistant) => {
++          const text =
++            blockAt(assistant, "text", event.data.ordinal) ??
++            assistant.content.findLast((item): item is SessionMessageAssistantText => item.type === "text")
++          if (text) text.text = event.data.text
+         })
+         return
+       case "session.tool.input.started":
+@@ -1018,6 +1361,7 @@ export function createData(config: CreateDataInput) {
+         return
+       case "session.reasoning.started":
+         message.editAssistant(event.data.sessionID, event.data.assistantMessageID, (assistant) => {
++          if (blockAt(assistant, "reasoning", event.data.ordinal)) return
+           assistant.content.push({
+             type: "reasoning",
+             text: "",
+@@ -1027,12 +1371,16 @@ export function createData(config: CreateDataInput) {
+         })
+         return
+       case "session.reasoning.delta":
+-        message.editReasoning(event.data.sessionID, event.data.assistantMessageID, (reasoning) => {
+-          reasoning.text += event.data.delta
+-        })
++        streamDelta(event.data.sessionID, event.data.assistantMessageID, { kind: "reasoning", ...event.data })
+         return
+       case "session.reasoning.ended":
+-        message.editReasoning(event.data.sessionID, event.data.assistantMessageID, (reasoning) => {
++        message.editAssistant(event.data.sessionID, event.data.assistantMessageID, (assistant) => {
++          const reasoning =
++            blockAt(assistant, "reasoning", event.data.ordinal) ??
++            assistant.content.findLast(
++              (item): item is SessionMessageAssistantReasoning => item.type === "reasoning" && !item.time?.completed,
++            )
++          if (!reasoning) return
+           reasoning.text = event.data.text
+           reasoning.time = { created: reasoning.time?.created ?? event.created, completed: event.created }
+           if (event.data.state !== undefined) reasoning.state = event.data.state
+@@ -1087,7 +1435,8 @@ export function createData(config: CreateDataInput) {
+             (item) =>
+               item.type === "assistant" &&
+               item.content.some(
+-                (part) => part.type === "tool" && (part.state.status === "streaming" || part.state.status === "running"),
++                (part) =>
++                  part.type === "tool" && (part.state.status === "streaming" || part.state.status === "running"),
+               ),
+           )
+         ) {
+@@ -1696,50 +2045,18 @@ export function createData(config: CreateDataInput) {
+           return position === undefined ? undefined : messages?.[position]
+         },
+         sync(sessionID: string) {
+-          return sync.run(`session.message:${sessionID}`, async () => {
+-            const response = await api().message.list({
+-              sessionID,
+-              limit: config.initialMessageLimit?.() ?? messagePageLimit,
+-              order: "desc",
+-            })
+-            // ocelot: a resync (reconnect, returning to the app, a branch switch) refetches down to
+-            // the oldest message already loaded instead of keeping only the newest page, so older
+-            // pages the user scrolled back to stay loaded and the scroll position holds. Stops once
+-            // that message is reached, or a page past the loaded depth if it no longer exists.
+-            const loaded = store.session.message[sessionID] ?? []
+-            const oldest = loaded.find((item) => !outbox.has(item.id))?.id
+-            const known = new Set(loaded.map((item) => item.id))
+-            const pages = [...response.data]
+-            let cursor = response.cursor.next ?? undefined
+-            if (oldest !== undefined && loaded.length > pages.length)
+-              while (cursor && !pages.some((item) => item.id === oldest) && pages.length < loaded.length + 200) {
+-                // Ask for exactly the depth still missing (new messages push it down) so nothing
+-                // older than what was loaded lands above the user's scroll position.
+-                const added = pages.filter((item) => !known.has(item.id)).length
+-                const limit = Math.min(200, Math.max(1, loaded.length + added - pages.length))
+-                const page = await api().message.list({ sessionID, limit, cursor })
+-                pages.push(...page.data)
+-                cursor = page.cursor.next ?? undefined
+-              }
+-            const fetched = pages.toReversed()
+-            // Same protection as the pending sync: a re-fetch racing an
+-            // admission must not wipe its local transcript row.
+-            const ids = new Set(fetched.map((item) => item.id))
+-            const admitted = new Set(
+-              (store.session.pending[sessionID] ?? []).flatMap((item) =>
+-                item.type === "user" || item.type === "synthetic" ? [item.id] : [],
+-              ),
+-            )
+-            const local = (store.session.message[sessionID] ?? []).filter(
+-              (item) => !ids.has(item.id) && (outbox.has(item.id) || admitted.has(item.id)),
+-            )
+-            const messages = local.length === 0 ? fetched : [...fetched, ...local]
+-            batch(() => {
+-              messageIndex.set(sessionID, new Map(messages.map((message, index) => [message.id, index])))
+-              setStore("session", "message", sessionID, reconcile(messages))
+-              setStore("session", "messageCursor", sessionID, cursor)
+-            })
+-          })
++          return sync.run(`session.message:${sessionID}`, () => syncMessages(sessionID))
++        },
++        /**
++         * ocelot: loads every message from `messageID` to the newest in one request (restoring a
++         * place far back). Resolves false when that is not possible (no delta sync yet, or the
++         * message is gone); the caller pages older instead.
++         */
++        async loadUntil(sessionID: string, messageID: string) {
++          return locked(sessionID, async () => {
++            if (messageIndex.get(sessionID)?.has(messageID)) return true
++            return synced.has(sessionID) ? syncDelta(sessionID, messageID) : false
++          }).catch(() => false)
+         },
+         more(sessionID: string) {
+           return store.session.messageCursor[sessionID] !== undefined
+@@ -1778,7 +2095,8 @@ export function createData(config: CreateDataInput) {
+           const cursor = store.session.messageCursor[sessionID]
+           if (!cursor || signal?.aborted) return
+           setStore("session", "messageLoading", sessionID, true)
+-          const request = (async () => {
++          // ocelot: under the sync lock, so a page never lands in the middle of a merge.
++          const request = locked(sessionID, async () => {
+             const fetched: SessionMessageInfo[] = []
+             let next: string | undefined = cursor
+             do {
+@@ -1807,8 +2125,9 @@ export function createData(config: CreateDataInput) {
+               setStore("session", "message", sessionID, reconcile(messages))
+               setStore("session", "messageCursor", sessionID, next)
+             })
++            refreshLater(sessionID)
+             return true
+-          })()
++          })
+             .catch((error) => {
+               if (!signal?.aborted) throw error
+             })
+diff --git a/packages/client/src/solid/message-sync.ts b/packages/client/src/solid/message-sync.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..20539d891faa88992b3e91016deac561d604638c
+--- /dev/null
++++ b/packages/client/src/solid/message-sync.ts
+@@ -0,0 +1,98 @@
++// ocelot (patch web/history-sync): the rules for bringing a client's transcript up to date from a
++// message-sync answer, and for streamed deltas that carry their offset. Pure; data.ts wires them.
++import type { SessionMessageAssistant, SessionMessageInfo } from "../promise"
++
++export type SyncAnswer = {
++  readonly ids: readonly string[]
++  readonly updated: readonly number[]
++  readonly data: readonly SessionMessageInfo[]
++}
++
++export type Merged = {
++  /** The new transcript, oldest first: held objects where unchanged, so their rows stay mounted. */
++  readonly messages: SessionMessageInfo[]
++  /** Newer copies of messages the client holds, to merge into them in place. */
++  readonly changed: ReadonlyMap<string, SessionMessageInfo>
++}
++
++/**
++ * The answer lists every message from the oldest the client holds; data comes only for what
++ * changed. A held copy is used for the rest, except one from the cache whose update time differs
++ * from the server's (`verify`). Messages the client got by event while the request was out are
++ * newer than the answer and stay at the end; held ones the answer leaves out are gone. Returns the
++ * ids it has no usable copy of instead, to be asked for.
++ */
++export function mergeSync(input: {
++  readonly held: readonly SessionMessageInfo[]
++  /** Ids held when the request went out. */
++  readonly sent: ReadonlySet<string>
++  /** Rows only this client has (unacknowledged submissions); the caller keeps them. */
++  readonly local: ReadonlySet<string>
++  readonly answer: SyncAnswer
++  readonly verify?: ReadonlyMap<string, number>
++}): Merged | { readonly missing: string[] } {
++  const held = new Map(input.held.map((item) => [item.id, item]))
++  const data = new Map(input.answer.data.map((item) => [item.id, item]))
++  const missing = input.answer.ids.filter(
++    (id, position) =>
++      !data.has(id) &&
++      (!held.has(id) || (input.verify !== undefined && input.verify.get(id) !== input.answer.updated[position])),
++  )
++  if (missing.length > 0) return { missing }
++  const listed = new Set(input.answer.ids)
++  const messages = input.answer.ids.map((id) => held.get(id) ?? data.get(id)!)
++  for (const item of input.held)
++    if (!input.sent.has(item.id) && !listed.has(item.id) && !input.local.has(item.id)) messages.push(item)
++  return { messages, changed: new Map([...data].filter(([id]) => held.has(id))) }
++}
++
++/**
++ * What to write to the history cache after a sync: the newest `limit` messages with their update
++ * times, minus what it already holds. Unfinished steps are left out (their streamed text changes
++ * without a new update time), so they are always fetched.
++ */
++export function cacheChange(input: {
++  readonly ids: readonly string[]
++  readonly updated: readonly number[]
++  readonly version: (id: string) => SessionMessageInfo
++  readonly persisted: ReadonlyMap<string, number>
++  readonly limit: number
++}) {
++  const wanted = new Map<string, number>()
++  const put: { id: string; u: number; m: SessionMessageInfo }[] = []
++  for (let position = Math.max(0, input.ids.length - input.limit); position < input.ids.length; position++) {
++    const id = input.ids[position]!
++    const item = input.version(id)
++    if (item.type === "assistant" && item.time.completed === undefined) continue
++    const u = input.updated[position]!
++    wanted.set(id, u)
++    if (input.persisted.get(id) !== u) put.push({ id, u, m: item })
++  }
++  const remove = [...input.persisted.keys()].filter((id) => !wanted.has(id))
++  return { wanted, put, remove, order: input.ids.slice(-input.limit) }
++}
++
++/**
++ * Applies a streamed delta at its offset: what a read already included is dropped. Returns false
++ * on a gap (deltas missed, or a read older than the stream). Without an offset (an older server)
++ * it appends, as before.
++ */
++export function applyDelta(block: { text: string }, delta: string, offset: number | undefined) {
++  if (offset === undefined) {
++    block.text += delta
++    return true
++  }
++  if (offset > block.text.length) return false
++  if (offset + delta.length > block.text.length) block.text = block.text.slice(0, offset) + delta
++  return true
++}
++
++/** The ordinal-th text or reasoning block of a step, the numbering the server's events use. */
++export function blockAt<K extends "text" | "reasoning">(assistant: SessionMessageAssistant, kind: K, ordinal: number) {
++  let seen = 0
++  for (const item of assistant.content) {
++    if (item.type !== kind) continue
++    if (seen++ === ordinal) return item as Extract<SessionMessageAssistant["content"][number], { type: K }>
++  }
++  return undefined
++}
+diff --git a/packages/client/test/fixture/message-server.ts b/packages/client/test/fixture/message-server.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c5b6b5256eed44733e8bac7a225a7113eeed7732
+--- /dev/null
++++ b/packages/client/test/fixture/message-server.ts
+@@ -0,0 +1,173 @@
++// ocelot: a stateful fake of the message routes (list, get, sync) with the server's semantics:
++// sequence order, update times on a controllable clock, the sync margin, include/held, reset, and
++// streamed text that reads see before the block ends (core/session/live-content.ts).
++import { OpenCode, type SessionMessageInfo } from "../../src/promise"
++
++type Row = { message: SessionMessageInfo; updated: number }
++
++const syncMarginMs = 10_000
++
++function encodeCursor(id: string, order: "asc" | "desc", direction: "previous" | "next") {
++  return Buffer.from(JSON.stringify({ id, order, direction })).toString("base64url")
++}
++
++export function createMessageServer(options?: { sync?: boolean }) {
++  let clock = 1_000_000
++  const rows: Row[] = []
++  // Streamed text not yet "stored", per assistant message id and text-block ordinal.
++  const live = new Map<string, Map<number, string>>()
++  const requests: { path: string; query: Record<string, string> }[] = []
++  // Requests wait on this before answering, when set.
++  let gate: Promise<void> | undefined
++
++  const server = {
++    requests,
++    now: () => clock,
++    tick(ms = 1) {
++      clock += ms
++    },
++    hold() {
++      const released = Promise.withResolvers<void>()
++      gate = released.promise
++      return () => {
++        gate = undefined
++        released.resolve()
++      }
++    },
++    ids: () => rows.map((row) => row.message.id),
++    add(...messages: SessionMessageInfo[]) {
++      for (const message of messages) {
++        clock++
++        rows.push({ message: structuredClone(message), updated: clock })
++      }
++    },
++    update(id: string, fn: (message: SessionMessageInfo) => void) {
++      const row = rows.find((item) => item.message.id === id)
++      if (!row) throw new Error(`no ${id}`)
++      fn(row.message)
++      clock++
++      row.updated = clock
++    },
++    remove(...ids: string[]) {
++      for (const id of ids) {
++        const index = rows.findIndex((row) => row.message.id === id)
++        if (index >= 0) rows.splice(index, 1)
++      }
++    },
++    /** Insert rows again with their old update time (what a branch switch does). */
++    restore(...restored: Row[]) {
++      rows.push(...restored)
++    },
++    row: (id: string) => rows.find((row) => row.message.id === id),
++    setLive(messageID: string, ordinal: number, text: string | undefined) {
++      const blocks = live.get(messageID) ?? new Map<number, string>()
++      if (text === undefined) blocks.delete(ordinal)
++      else blocks.set(ordinal, text)
++      live.set(messageID, blocks)
++    },
++    api: undefined as unknown as ReturnType<typeof OpenCode.make>,
++  }
++
++  function overlay(message: SessionMessageInfo): SessionMessageInfo {
++    const blocks = live.get(message.id)
++    if (!blocks || message.type !== "assistant") return structuredClone(message)
++    let ordinal = 0
++    return {
++      ...structuredClone(message),
++      content: message.content.map((item) => {
++        if (item.type !== "text") return structuredClone(item)
++        const text = blocks.get(ordinal++)
++        return text !== undefined && item.text === "" ? { ...item, text } : structuredClone(item)
++      }),
++    }
++  }
++
++  async function handle(request: Request): Promise<Response> {
++    const url = new URL(request.url)
++    const query = Object.fromEntries(url.searchParams)
++    requests.push({ path: url.pathname, query })
++    if (gate) await gate
++    const sync = url.pathname.match(/^\/api\/session\/[^/]+\/message-sync$/)
++    if (sync) {
++      if (options?.sync === false) return Response.json({ _tag: "RouteNotFound", message: "no route" }, { status: 404 })
++      const watermark = clock
++      const since =
++        query.since === undefined || Number(query.since) > clock ? undefined : Number(query.since) - syncMarginMs
++      const include = new Set((query.include ?? "").split(",").filter(Boolean))
++      let start = 0
++      if (query.from) {
++        start = rows.findIndex((row) => row.message.id === query.from)
++        if (start < 0) return Response.json({ ids: [], updated: [], data: [], watermark, reset: true, cursor: {} })
++      } else start = Math.max(0, rows.length - Number(query.limit ?? 50))
++      const held = query.held ? rows.findIndex((row) => row.message.id === query.held) : -1
++      const heldAt = query.held ? (held < 0 ? Infinity : held) : -1
++      const range = rows.slice(start)
++      const data = range.filter((row, index) => {
++        if (since === undefined) return true
++        const unfinished = row.message.type === "assistant" && row.message.time.completed === undefined
++        return row.updated >= since || unfinished || include.has(row.message.id) || start + index < heldAt
++      })
++      const oldest = range[0]
++      return Response.json({
++        ids: range.map((row) => row.message.id),
++        updated: range.map((row) => row.updated),
++        data: data.map((row) => overlay(row.message)),
++        watermark,
++        reset: false,
++        cursor: oldest ? { next: encodeCursor(oldest.message.id, "desc", "next") } : {},
++      })
++    }
++    const one = url.pathname.match(/^\/api\/session\/[^/]+\/message\/([^/]+)$/)
++    if (one) {
++      const row = rows.find((item) => item.message.id === one[1])
++      return row
++        ? Response.json({ data: overlay(row.message) })
++        : Response.json({ message: "not found" }, { status: 404 })
++    }
++    if (url.pathname.match(/^\/api\/session\/[^/]+\/message$/)) {
++      const limit = Number(query.limit ?? 50)
++      let newestFirst = rows.toReversed()
++      if (query.cursor) {
++        const cursor = JSON.parse(Buffer.from(query.cursor, "base64url").toString()) as { id: string }
++        const index = newestFirst.findIndex((row) => row.message.id === cursor.id)
++        newestFirst = index < 0 ? [] : newestFirst.slice(index + 1)
++      }
++      const page = newestFirst.slice(0, limit)
++      const last = page.at(-1)
++      return Response.json({
++        data: page.map((row) => overlay(row.message)),
++        cursor: last ? { next: encodeCursor(last.message.id, "desc", "next") } : {},
++      })
++    }
++    if (url.pathname.endsWith("/inbox")) return Response.json({ data: [] })
++    if (url.pathname === "/api/session/active") return Response.json({})
++    return Response.json({ message: `unexpected ${url.pathname}` }, { status: 500 })
++  }
++
++  server.api = OpenCode.make({
++    baseUrl: "http://opencode.local",
++    fetch: (async (input: RequestInfo | URL, init?: RequestInit) =>
++      handle(input instanceof Request ? input : new Request(input, init))) as typeof globalThis.fetch,
++  })
++  return server
++}
++
++export function userMessage(index: number): SessionMessageInfo {
++  return {
++    id: `msg_${String(index).padStart(4, "0")}`,
++    type: "user",
++    text: `Message ${index}`,
++    time: { created: index },
++  }
++}
++
++export function assistantMessage(id: string, text: string, completed = true): SessionMessageInfo {
++  return {
++    id,
++    type: "assistant",
++    agent: "build",
++    model: { providerID: "provider", id: "model" },
++    content: [{ type: "text", text }],
++    time: { created: 1, ...(completed ? { completed: 2 } : {}) },
++  } as SessionMessageInfo
++}
+diff --git a/packages/client/test/fixture/message-sync.ts b/packages/client/test/fixture/message-sync.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4a97fea904782a4e8d479eda62acc3d51d0e14b3
+--- /dev/null
++++ b/packages/client/test/fixture/message-sync.ts
+@@ -0,0 +1,46 @@
++// ocelot: answers /message-sync through a mock that only implements session.message.list, so
++// tests written for the full transcript read keep their request accounting (the mock sees the
++// list requests a sync stands for, not the sync itself). Every message is sent as changed.
++export function serveMessageSync(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
++  return (async (input: RequestInfo | URL, init?: RequestInit) => {
++    const request = input instanceof Request ? input : new Request(input, init)
++    const url = new URL(request.url)
++    const match = url.pathname.match(/^\/api\/session\/([^/]+)\/message-sync$/)
++    if (!match) return fetch(input, init)
++    const from = url.searchParams.get("from")
++    const collected: { id: string }[] = []
++    let cursor: string | undefined
++    let list = new URL(`/api/session/${match[1]}/message`, url)
++    if (from) list.searchParams.set("limit", "200")
++    else {
++      list.searchParams.set("limit", url.searchParams.get("limit") ?? "20")
++      list.searchParams.set("order", "desc")
++    }
++    for (;;) {
++      const response = await fetch(new Request(list, { signal: request.signal }))
++      if (!response.ok) return response
++      const body = (await response.json()) as { data: { id: string }[]; cursor?: { next?: string } }
++      collected.push(...body.data)
++      cursor = body.cursor?.next
++      if (!from || !cursor || collected.some((item) => item.id === from)) break
++      list = new URL(`/api/session/${match[1]}/message`, url)
++      list.searchParams.set("limit", "200")
++      list.searchParams.set("cursor", cursor)
++    }
++    let data = collected.toReversed()
++    if (from) {
++      const start = data.findIndex((item) => item.id === from)
++      if (start < 0)
++        return Response.json({ ids: [], updated: [], data: [], watermark: Date.now(), reset: true, cursor: {} })
++      data = data.slice(start)
++    }
++    return Response.json({
++      ids: data.map((item) => item.id),
++      updated: data.map(() => 0),
++      data,
++      watermark: Date.now(),
++      reset: false,
++      cursor: cursor ? { next: cursor } : {},
++    })
++  }) as typeof globalThis.fetch
++}
+diff --git a/packages/client/test/solid-data.test.ts b/packages/client/test/solid-data.test.ts
+index aee5965a5614fcbb881ecfb023cc1c57255a48ea..490f14e43fd680f16cb1eb42dea6b6804dac0d40 100644
+--- a/packages/client/test/solid-data.test.ts
++++ b/packages/client/test/solid-data.test.ts
+@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
+ import { getEventListeners } from "node:events"
+ import { createRoot } from "solid-js"
+ import { createData, type CreateDataInput } from "../src/solid"
++import { serveMessageSync } from "./fixture/message-sync"
+ import { OpenCode, type ModelInfo, type OpenCodeEvent, type Project, type SessionInfo } from "../src/promise"
+ 
+ const session = (viewed: number): SessionInfo => ({
+@@ -18,7 +19,7 @@ test("uses the configured initial window and retains normal cursor page sizes",
+   const requests: { limit: string | null; cursor: string | null }[] = []
+   const api = OpenCode.make({
+     baseUrl: "http://opencode.local",
+-    fetch: async (input, init) => {
++    fetch: serveMessageSync(async (input, init) => {
+       const url = new URL((input instanceof Request ? input : new Request(input, init)).url)
+       const cursor = url.searchParams.get("cursor")
+       requests.push({ limit: url.searchParams.get("limit"), cursor })
+@@ -26,7 +27,7 @@ test("uses the configured initial window and retains normal cursor page sizes",
+         data: [{ id: cursor ? "msg_1" : "msg_2", type: "user", text: "History", time: { created: cursor ? 1 : 2 } }],
+         cursor: cursor ? {} : { next: "older" },
+       })
+-    },
++    }),
+   })
+   const setup = createRoot((dispose) => ({
+     data: createData({
+@@ -58,7 +59,7 @@ test("reconciles a stale running tool when execution settles", async () => {
+   let requests = 0
+   const api = OpenCode.make({
+     baseUrl: "http://opencode.local",
+-    fetch: async () => {
++    fetch: serveMessageSync(async () => {
+       requests++
+       return Response.json({
+         data: [
+@@ -83,7 +84,7 @@ test("reconciles a stale running tool when execution settles", async () => {
+         ],
+         cursor: {},
+       })
+-    },
++    }),
+   })
+   const setup = createRoot((dispose) => ({
+     data: createData({
+@@ -833,12 +834,12 @@ test("loads bounded message pages", async () => {
+   const requests: URL[] = []
+   const api = OpenCode.make({
+     baseUrl: "http://opencode.local",
+-    fetch: async (input, init) => {
++    fetch: serveMessageSync(async (input, init) => {
+       const request = input instanceof Request ? input : new Request(input, init)
+       const url = new URL(request.url)
+       requests.push(url)
+       return Response.json({ data: [], cursor: requests.length === 1 ? { next: "next" } : {} })
+-    },
++    }),
+   })
+   const setup = createRoot((dispose) => ({
+     data: createData({
+@@ -876,7 +877,7 @@ test.each(["success", "failure", "cancel", "cancel-retry", "cancel-page", "join-
+     const publications: string[][] = []
+     const api = OpenCode.make({
+       baseUrl: "http://opencode.local",
+-      fetch: async (input, init) => {
++      fetch: serveMessageSync(async (input, init) => {
+         const url = new URL(input instanceof Request ? input.url : String(input))
+         requests.push(url)
+         const cursor = url.searchParams.get("cursor")
+@@ -891,7 +892,7 @@ test.each(["success", "failure", "cancel", "cancel-retry", "cancel-page", "join-
+         await release.promise
+         if (mode === "failure") return Response.json({ message: "offline" }, { status: 503 })
+         return Response.json({ data: [], cursor: {} })
+-      },
++      }),
+     })
+     const setup = createRoot((dispose) => {
+       const data = createData({
+@@ -1124,63 +1125,3 @@ async function wait(check: () => boolean) {
+     await Bun.sleep(10)
+   }
+ }
+-
+-// ocelot: a resync keeps the history the user scrolled back to.
+-test("a resync refetches down to the oldest loaded message instead of dropping older pages", async () => {
+-  // msg_01 (oldest) … msg_30 (newest); pages of the requested size, newest first.
+-  let messages = Array.from({ length: 30 }, (_, index) => ({
+-    id: `msg_${String(index + 1).padStart(2, "0")}`,
+-    type: "user",
+-    text: `Message ${index + 1}`,
+-    time: { created: index + 1 },
+-  }))
+-  const requests: Record<string, string>[] = []
+-  const api = OpenCode.make({
+-    baseUrl: "http://opencode.local",
+-    fetch: async (input, init) => {
+-      const url = new URL((input instanceof Request ? input : new Request(input, init)).url)
+-      requests.push(Object.fromEntries(url.searchParams))
+-      const limit = Number(url.searchParams.get("limit"))
+-      const start = Number(url.searchParams.get("cursor") ?? "0")
+-      const newestFirst = messages.toReversed()
+-      const data = newestFirst.slice(start, start + limit)
+-      const next = start + limit < newestFirst.length ? String(start + limit) : undefined
+-      return Response.json({ data, cursor: next ? { next } : {} })
+-    },
+-  })
+-  const setup = createRoot((dispose) => ({
+-    data: createData({
+-      api: () => api,
+-      directory: "/project",
+-      initialMessageLimit: () => 5,
+-      event: { on: () => () => {}, listen: () => () => {} },
+-    }),
+-    dispose,
+-  }))
+-  const ids = () => setup.data.session.message.list("ses_refresh").map((message) => message.id)
+-  try {
+-    await setup.data.session.message.sync("ses_refresh")
+-    await setup.data.session.message.loadMore("ses_refresh")
+-    expect(ids()).toHaveLength(25)
+-    expect(ids()[0]).toBe("msg_06")
+-
+-    // Two new messages while away, then the reconnect resync.
+-    messages = [...messages, ...[31, 32].map((index) => ({ ...messages[0]!, id: `msg_${index}`, text: `Message ${index}` }))]
+-    requests.length = 0
+-    setup.data.session.message.invalidate("ses_refresh")
+-    await setup.data.session.message.sync("ses_refresh")
+-    expect(ids()[0]).toBe("msg_06")
+-    expect(ids().at(-1)).toBe("msg_32")
+-    expect(ids()).toHaveLength(27)
+-    expect(requests).toEqual([
+-      { limit: "5", order: "desc" },
+-      { cursor: "5", limit: "22" },
+-    ])
+-    // Paging further back continues from where the resync stopped.
+-    requests.length = 0
+-    await setup.data.session.message.loadMore("ses_refresh")
+-    expect(ids()[0]).toBe("msg_01")
+-  } finally {
+-    setup.dispose()
+-  }
+-})
+diff --git a/packages/client/test/solid-eviction.test.ts b/packages/client/test/solid-eviction.test.ts
+index 64b233a8425e0384e9a68917420a0b55f0f18fac..588ae3de24ed3703da02d71a8144eb6fa32630aa 100644
+--- a/packages/client/test/solid-eviction.test.ts
++++ b/packages/client/test/solid-eviction.test.ts
+@@ -1,4 +1,5 @@
+ import { expect, test } from "bun:test"
++import { serveMessageSync } from "./fixture/message-sync"
+ import { createRoot } from "solid-js"
+ import { createData, type CreateDataInput } from "../src/solid"
+ import { OpenCode, type OpenCodeEvent, type SessionInfo } from "../src/promise"
+@@ -128,7 +129,7 @@ function fixture(read?: (url: URL) => Promise<Response | void>) {
+   const listeners = new Set<Parameters<CreateDataInput["event"]["listen"]>[0]>()
+   const api = OpenCode.make({
+     baseUrl: "http://opencode.local",
+-    fetch: async (input) => {
++    fetch: serveMessageSync(async (input) => {
+       const url = new URL(input instanceof Request ? input.url : String(input))
+       const response = await read?.(url)
+       if (response) return response
+@@ -150,7 +151,7 @@ function fixture(read?: (url: URL) => Promise<Response | void>) {
+         data: [{ id: "msg_page", type: "user", text: "page", time: { created: 0 } }],
+         cursor: url.searchParams.has("cursor") ? {} : { next: "older" },
+       })
+-    },
++    }),
+   })
+   return createRoot((dispose) => {
+     const data = createData({
+diff --git a/packages/client/test/solid-message-sync.test.ts b/packages/client/test/solid-message-sync.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d59b1235819419487133af836b3359a27c515369
+--- /dev/null
++++ b/packages/client/test/solid-message-sync.test.ts
+@@ -0,0 +1,539 @@
++// ocelot: delta message sync, the history cache, and streamed deltas by offset.
++import { expect, test } from "bun:test"
++import { createRoot } from "solid-js"
++import { applyDelta, cacheChange, mergeSync } from "../src/solid/message-sync"
++import {
++  createData,
++  type CreateDataInput,
++  type HistoryCache,
++  type HistoryCacheChange,
++  type HistoryCacheRecord,
++} from "../src/solid/data"
++import type { OpenCodeEvent, SessionMessageInfo } from "../src/promise"
++import { assistantMessage, createMessageServer, userMessage } from "./fixture/message-server"
++
++const sessionID = "ses_sync"
++
++function memoryCache() {
++  const sessions = new Map<
++    string,
++    { order: string[]; watermark: number; cursor?: string; records: Map<string, HistoryCacheRecord> }
++  >()
++  const writes: HistoryCacheChange[] = []
++  let failNext = false
++  let drops = 0
++  const cache: HistoryCache = {
++    async read(id) {
++      const entry = sessions.get(id)
++      if (!entry) return undefined
++      return {
++        order: [...entry.order],
++        watermark: entry.watermark,
++        cursor: entry.cursor,
++        records: new Map(entry.records),
++      }
++    },
++    async write(id, change) {
++      writes.push(change)
++      if (failNext) {
++        failNext = false
++        throw new Error("quota")
++      }
++      const entry = sessions.get(id) ?? { order: [], watermark: 0, records: new Map() }
++      for (const record of change.put) entry.records.set(record.id, { u: record.u, m: structuredClone(record.m) })
++      for (const removed of change.remove) entry.records.delete(removed)
++      entry.order = [...change.order]
++      entry.watermark = change.watermark
++      entry.cursor = change.cursor
++      sessions.set(id, entry)
++    },
++    async drop(id) {
++      drops++
++      sessions.delete(id)
++    },
++  }
++  return {
++    cache,
++    sessions,
++    writes,
++    failNextWrite: () => (failNext = true),
++    drops: () => drops,
++  }
++}
++
++function setup(server: ReturnType<typeof createMessageServer>, options?: Partial<CreateDataInput>) {
++  const listeners = new Set<Parameters<CreateDataInput["event"]["listen"]>[0]>()
++  return createRoot((dispose) => {
++    const data = createData({
++      api: () => server.api,
++      directory: "/project",
++      initialMessageLimit: () => 5,
++      event: {
++        on: () => () => {},
++        listen(handler) {
++          listeners.add(handler)
++          return () => listeners.delete(handler)
++        },
++      },
++      ...options,
++    })
++    const emit = (event: Omit<OpenCodeEvent, "id" | "created"> & { id?: string }) => {
++      const full = { id: `evt_${Math.random()}`, created: 1, ...event } as OpenCodeEvent
++      listeners.forEach((listener) => listener({ name: full.type, details: full }))
++    }
++    const ids = () => data.session.message.list(sessionID).map((item) => item.id)
++    const resync = async () => {
++      data.session.message.invalidate(sessionID)
++      await data.session.message.sync(sessionID)
++    }
++    return { data, dispose, emit, ids, resync }
++  })
++}
++
++const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
++const wait = async (condition: () => boolean, timeout = 3_000) => {
++  const start = Date.now()
++  while (!condition()) {
++    if (Date.now() - start > timeout) throw new Error("timed out")
++    await new Promise((resolve) => setTimeout(resolve, 5))
++  }
++}
++
++function seeded(count: number, options?: { sync?: boolean }) {
++  const server = createMessageServer(options)
++  server.add(...Array.from({ length: count }, (_, index) => userMessage(index + 1)))
++  // Long enough ago that the sync margin does not resend everything.
++  server.tick(60_000)
++  return server
++}
++
++test("the first read is one sync request for the newest page", async () => {
++  const server = seeded(30)
++  const client = setup(server)
++  try {
++    await client.data.session.message.sync(sessionID)
++    expect(client.ids()).toEqual(server.ids().slice(-5))
++    expect(server.requests).toEqual([{ path: `/api/session/${sessionID}/message-sync`, query: { limit: "5" } }])
++    expect(client.data.session.message.more(sessionID)).toBe(true)
++  } finally {
++    client.dispose()
++  }
++})
++
++test("a resync sends only what changed and keeps older pages and newer messages", async () => {
++  const server = seeded(30)
++  const client = setup(server)
++  try {
++    await client.data.session.message.sync(sessionID)
++    await client.data.session.message.loadMore(sessionID)
++    expect(client.ids()).toHaveLength(25)
++    expect(client.ids()[0]).toBe("msg_0006")
++
++    // While away: two new messages, one edited far back, one deleted (a revert).
++    server.tick(60_000)
++    server.add(userMessage(31), userMessage(32))
++    server.update("msg_0010", (message) => {
++      if (message.type === "user") message.text = "edited"
++    })
++    server.remove("msg_0020")
++    server.requests.length = 0
++    await client.resync()
++
++    expect(server.requests).toHaveLength(1)
++    expect(server.requests[0]!.query.from).toBe("msg_0006")
++    expect(server.requests[0]!.query.since).toBeDefined()
++    expect(client.ids()).toEqual(server.ids().slice(5))
++    expect(client.data.session.message.get(sessionID, "msg_0010")).toMatchObject({ text: "edited" })
++    // Paging further back continues from the oldest held message.
++    await client.data.session.message.loadMore(sessionID)
++    expect(client.ids()[0]).toBe("msg_0001")
++  } finally {
++    client.dispose()
++  }
++})
++
++test("a resync keeps the objects of unchanged and updated messages (rows do not re-mount)", async () => {
++  const server = seeded(6)
++  server.add(assistantMessage("msg_reply", "", false))
++  server.setLive("msg_reply", 0, "Partial")
++  const client = setup(server)
++  try {
++    await client.data.session.message.sync(sessionID)
++    const list = client.data.session.message.list(sessionID)
++    const before = list.map((item) => item)
++    server.tick(60_000)
++    server.update("msg_0004", (message) => {
++      if (message.type === "user") message.text = "edited"
++    })
++    server.setLive("msg_reply", 0, "Partial and more")
++    await client.resync()
++    const after = client.data.session.message.list(sessionID)
++    // The same array, changed in place.
++    expect(after).toBe(list)
++    expect(after.map((item) => item.id)).toEqual(before.map((item) => item.id))
++    after.forEach((item, index) => expect(item).toBe(before[index]!))
++    expect(after[1]).toMatchObject({ text: "edited" })
++    expect(after.at(-1)).toMatchObject({ content: [{ type: "text", text: "Partial and more" }] })
++  } finally {
++    client.dispose()
++  }
++})
++
++test("messages that come back with an old update time (a branch switch) are fetched by id", async () => {
++  const server = seeded(12)
++  const client = setup(server)
++  try {
++    await client.data.session.message.sync(sessionID)
++    server.tick(60_000)
++    const parked = [server.row("msg_0011")!, server.row("msg_0012")!]
++    server.remove("msg_0011", "msg_0012")
++    server.add(userMessage(13))
++    await client.resync()
++    expect(client.ids()).toEqual(["msg_0008", "msg_0009", "msg_0010", "msg_0013"])
++
++    // Switch back: the parked rows return with their old update times; the client lacks them.
++    server.tick(60_000)
++    server.remove("msg_0013")
++    server.restore(...parked)
++    server.requests.length = 0
++    await client.resync()
++    expect(client.ids()).toEqual(["msg_0008", "msg_0009", "msg_0010", "msg_0011", "msg_0012"])
++    expect(server.requests.map((request) => request.query.include)).toEqual([undefined, "msg_0011,msg_0012"])
++  } finally {
++    client.dispose()
++  }
++})
++
++test("when the oldest held message is gone, the sync starts over from the newest page", async () => {
++  const server = seeded(10)
++  const client = setup(server)
++  try {
++    await client.data.session.message.sync(sessionID)
++    server.remove(...server.ids())
++    server.add(userMessage(50), userMessage(51))
++    await client.resync()
++    expect(client.ids()).toEqual(["msg_0050", "msg_0051"])
++  } finally {
++    client.dispose()
++  }
++})
++
++test("an older server without the sync route gets the full read, keeping older pages", async () => {
++  const server = seeded(30, { sync: false })
++  const client = setup(server)
++  try {
++    await client.data.session.message.sync(sessionID)
++    await client.data.session.message.loadMore(sessionID)
++    expect(client.ids()[0]).toBe("msg_0006")
++    server.add(userMessage(31), userMessage(32))
++    await client.resync()
++    expect(client.ids()[0]).toBe("msg_0006")
++    expect(client.ids().at(-1)).toBe("msg_0032")
++    expect(client.ids()).toHaveLength(27)
++  } finally {
++    client.dispose()
++  }
++})
++
++test("a message added by an event during a sync is kept", async () => {
++  const server = seeded(10)
++  const client = setup(server)
++  try {
++    await client.data.session.message.sync(sessionID)
++    const release = server.hold()
++    client.data.session.message.invalidate(sessionID)
++    const syncing = client.data.session.message.sync(sessionID)
++    await wait(() => server.requests.length === 2)
++    // The server adds a message after it answered; its event reaches the client first.
++    client.emit({
++      type: "session.agent.selected",
++      durable: { aggregateID: sessionID, seq: 99, version: 1 },
++      data: { sessionID, agent: "plan" },
++      id: "evt_late",
++    })
++    release()
++    await syncing
++    expect(client.ids().at(-1)).toBe("msg_late")
++    expect(client.ids()).toHaveLength(6)
++  } finally {
++    client.dispose()
++  }
++})
++
++test("the cache shows the transcript before the server answers, and the sync corrects it", async () => {
++  const server = seeded(40)
++  const memory = memoryCache()
++  const first = setup(server, { historyCache: memory.cache })
++  try {
++    await first.data.session.message.sync(sessionID)
++    await first.data.session.message.loadMore(sessionID)
++    await first.resync()
++    await flush()
++  } finally {
++    first.dispose()
++  }
++  expect(memory.sessions.get(sessionID)?.order).toEqual(server.ids().slice(-25))
++
++  // Meanwhile: one cached message changed, one deleted, two added; one record went missing.
++  server.tick(60_000)
++  server.update("msg_0030", (message) => {
++    if (message.type === "user") message.text = "changed"
++  })
++  server.remove("msg_0031")
++  server.add(userMessage(41), userMessage(42))
++  memory.sessions.get(sessionID)!.records.delete("msg_0025")
++
++  const release = server.hold()
++  const second = setup(server, { historyCache: memory.cache })
++  try {
++    server.requests.length = 0
++    const syncing = second.data.session.message.sync(sessionID)
++    await wait(() => second.ids().length > 0)
++    // Shown from the cache, with the missing record skipped.
++    expect(second.ids()).toHaveLength(24)
++    expect(second.ids()[0]).toBe("msg_0016")
++    expect(second.data.session.message.more(sessionID)).toBe(true)
++    release()
++    await syncing
++    expect(second.ids()).toEqual(server.ids().slice(15))
++    expect(second.data.session.message.get(sessionID, "msg_0030")).toMatchObject({ text: "changed" })
++    expect(second.data.session.message.get(sessionID, "msg_0025")).toMatchObject({ text: "Message 25" })
++    // One request with the watermark, one for the record that was missing.
++    expect(server.requests.map((request) => [request.query.from, request.query.include])).toEqual([
++      ["msg_0016", undefined],
++      ["msg_0016", "msg_0025"],
++    ])
++    await second.data.session.message.loadMore(sessionID)
++    expect(second.ids()[0]).toBe("msg_0001")
++  } finally {
++    release()
++    second.dispose()
++  }
++})
++
++test("a cached copy whose update time differs from the server's is replaced", async () => {
++  const server = seeded(8)
++  const memory = memoryCache()
++  const first = setup(server, { historyCache: memory.cache })
++  await first.data.session.message.sync(sessionID)
++  await flush()
++  first.dispose()
++  // Another tab wrote an older copy of a message after this cache's watermark was recorded.
++  const record = memory.sessions.get(sessionID)!.records.get("msg_0006")!
++  memory.sessions
++    .get(sessionID)!
++    .records.set("msg_0006", { u: record.u - 1, m: { ...record.m, text: "stale" } as never })
++  const second = setup(server, { historyCache: memory.cache })
++  try {
++    await second.data.session.message.sync(sessionID)
++    expect(second.data.session.message.get(sessionID, "msg_0006")).toMatchObject({ text: "Message 6" })
++  } finally {
++    second.dispose()
++  }
++})
++
++test("the cache skips unfinished steps and recovers from a failed write", async () => {
++  const server = seeded(3)
++  server.add(assistantMessage("msg_streaming", "", false))
++  const memory = memoryCache()
++  const client = setup(server, { historyCache: memory.cache })
++  try {
++    memory.failNextWrite()
++    await client.data.session.message.sync(sessionID)
++    await flush()
++    expect(memory.drops()).toBe(1)
++    expect(memory.sessions.has(sessionID)).toBe(false)
++    server.update("msg_streaming", (message) => {
++      if (message.type === "assistant") {
++        message.content = [{ type: "text", text: "done" }]
++        message.time.completed = 3
++      }
++    })
++    await client.resync()
++    await flush()
++    // Everything is written again after the failure, now including the finished step.
++    expect([...memory.sessions.get(sessionID)!.records.keys()]).toEqual([...server.ids()])
++    expect(memory.writes.at(-1)!.put).toHaveLength(4)
++  } finally {
++    client.dispose()
++  }
++})
++
++test("loadUntil brings a message far back in with one request", async () => {
++  const server = seeded(300)
++  const client = setup(server)
++  try {
++    await client.data.session.message.sync(sessionID)
++    server.requests.length = 0
++    expect(await client.data.session.message.loadUntil(sessionID, "msg_0010")).toBe(true)
++    expect(server.requests).toHaveLength(1)
++    expect(server.requests[0]!.query).toMatchObject({ from: "msg_0010", held: "msg_0296" })
++    expect(client.ids()).toEqual(server.ids().slice(9))
++    await client.data.session.message.loadMore(sessionID)
++    expect(client.ids()[0]).toBe("msg_0001")
++    expect(await client.data.session.message.loadUntil(sessionID, "msg_gone")).toBe(false)
++  } finally {
++    client.dispose()
++  }
++})
++
++test("loadUntil called before the first read has finished waits for it instead of giving up", async () => {
++  const server = seeded(100)
++  const client = setup(server)
++  const release = server.hold()
++  try {
++    // The timeline's restore asks as soon as the first messages show, inside the store update
++    // that publishes them; before the fix the sync had not recorded its state by then.
++    const first = client.data.session.message.sync(sessionID)
++    await wait(() => server.requests.length === 1)
++    const jumped = client.data.session.message.loadUntil(sessionID, "msg_0010")
++    release()
++    await first
++    expect(await jumped).toBe(true)
++    expect(client.ids()[0]).toBe("msg_0010")
++  } finally {
++    release()
++    client.dispose()
++  }
++})
++
++const textDelta = (delta: string, offset?: number, ordinal = 0) =>
++  ({
++    type: "session.text.delta",
++    data: { sessionID, assistantMessageID: "msg_reply", ordinal, delta, ...(offset === undefined ? {} : { offset }) },
++  }) as never
++
++test("deltas apply at their offset: duplicates are dropped and a gap refetches the message", async () => {
++  const server = seeded(2)
++  server.add(assistantMessage("msg_reply", "", false))
++  server.setLive("msg_reply", 0, "Hello")
++  const client = setup(server)
++  const text = () => {
++    const reply = client.data.session.message.get(sessionID, "msg_reply")
++    return reply?.type === "assistant" && reply.content[0]?.type === "text" ? reply.content[0].text : undefined
++  }
++  try {
++    await client.data.session.message.sync(sessionID)
++    expect(text()).toBe("Hello")
++    // Already part of the read.
++    client.emit(textDelta("Hel", 0))
++    client.emit(textDelta("lo", 3))
++    expect(text()).toBe("Hello")
++    client.emit(textDelta(", wor", 5))
++    expect(text()).toBe("Hello, wor")
++    // Missed ", wor" + "ld" + "!" while away; the next delta starts at 13.
++    server.setLive("msg_reply", 0, "Hello, world! How")
++    const release = server.hold()
++    client.emit(textDelta(" are", 17))
++    await wait(() => server.requests.some((request) => request.path.endsWith("/message/msg_reply")))
++    // Held while the refetch runs, then replayed on the fresh copy.
++    client.emit(textDelta(" you", 21))
++    release()
++    await wait(() => text() === "Hello, world! How are you")
++  } finally {
++    client.dispose()
++  }
++})
++
++test("a block start that a read already included is not added twice", async () => {
++  const server = seeded(1)
++  server.add(assistantMessage("msg_reply", "", false))
++  const client = setup(server)
++  try {
++    await client.data.session.message.sync(sessionID)
++    client.emit({
++      type: "session.text.started",
++      data: { sessionID, assistantMessageID: "msg_reply", ordinal: 0 },
++    } as never)
++    client.emit({
++      type: "session.text.started",
++      data: { sessionID, assistantMessageID: "msg_reply", ordinal: 1 },
++    } as never)
++    client.emit(textDelta("second", 0, 1))
++    const reply = client.data.session.message.get(sessionID, "msg_reply") as Extract<
++      SessionMessageInfo,
++      { type: "assistant" }
++    >
++    expect(reply.content).toEqual([
++      { type: "text", text: "" },
++      { type: "text", text: "second" },
++    ])
++  } finally {
++    client.dispose()
++  }
++})
++
++test("applyDelta", () => {
++  const block = { text: "abc" }
++  expect(applyDelta(block, "d", undefined)).toBe(true)
++  expect(block.text).toBe("abcd")
++  expect(applyDelta(block, "cd", 2)).toBe(true)
++  expect(block.text).toBe("abcd")
++  expect(applyDelta(block, "def", 3)).toBe(true)
++  expect(block.text).toBe("abcdef")
++  expect(applyDelta(block, "x", 9)).toBe(false)
++  expect(block.text).toBe("abcdef")
++})
++
++const user = (id: string, text = id) => ({ id, type: "user", text, time: { created: 1 } }) as SessionMessageInfo
++
++test("mergeSync: unchanged copies kept by identity, changed ones merged, gone ones dropped, late ones kept", () => {
++  const [a, b, c, d] = ["msg_a", "msg_b", "msg_c", "msg_d"].map((id) => user(id))
++  const late = user("msg_late")
++  const local = user("msg_local")
++  const merged = mergeSync({
++    held: [a!, b!, c!, local, late],
++    sent: new Set(["msg_a", "msg_b", "msg_c", "msg_local"]),
++    local: new Set(["msg_local"]),
++    answer: { ids: ["msg_a", "msg_c", "msg_d"], updated: [1, 2, 3], data: [user("msg_c", "new"), d!] },
++  })
++  if ("missing" in merged) throw new Error("unexpected")
++  expect(merged.messages.map((item) => item.id)).toEqual(["msg_a", "msg_c", "msg_d", "msg_late"])
++  expect(merged.messages[0]).toBe(a!)
++  expect(merged.messages[1]).toBe(c!)
++  expect([...merged.changed.keys()]).toEqual(["msg_c"])
++})
++
++test("mergeSync: asks for what it has no copy of, and for cached copies the server has changed", () => {
++  const a = user("msg_a")
++  expect(
++    mergeSync({
++      held: [a],
++      sent: new Set(["msg_a"]),
++      local: new Set(),
++      answer: { ids: ["msg_a", "msg_b"], updated: [5, 6], data: [] },
++    }),
++  ).toEqual({ missing: ["msg_b"] })
++  expect(
++    mergeSync({
++      held: [a],
++      sent: new Set(["msg_a"]),
++      local: new Set(),
++      answer: { ids: ["msg_a"], updated: [5], data: [] },
++      verify: new Map([["msg_a", 4]]),
++    }),
++  ).toEqual({ missing: ["msg_a"] })
++})
++
++test("cacheChange: newest `limit`, unfinished steps left out, only what differs", () => {
++  const items = new Map([
++    ["msg_a", user("msg_a")],
++    ["msg_b", user("msg_b")],
++    ["msg_c", assistantMessage("msg_c", "", false)],
++    ["msg_d", user("msg_d")],
++  ])
++  const change = cacheChange({
++    ids: [...items.keys()],
++    updated: [1, 2, 3, 4],
++    version: (id) => items.get(id)!,
++    persisted: new Map([
++      ["msg_a", 1],
++      ["msg_b", 1],
++      ["msg_c", 3],
++    ]),
++    limit: 3,
++  })
++  expect(change.order).toEqual(["msg_b", "msg_c", "msg_d"])
++  expect(change.put.map((record) => record.id)).toEqual(["msg_b", "msg_d"])
++  expect(change.remove).toEqual(["msg_a", "msg_c"])
++})

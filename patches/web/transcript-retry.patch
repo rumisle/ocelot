@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 10 Oct 2026 21:21:40 +0800
+Subject: web/transcript-retry: a connection lost while a transcript loads is
+ retried
+
+The timeline's first transcript read failing with a transport error reached the app's error
+screen ("Something went wrong", until a manual reload): `ready` reads the resource while no rows
+are shown yet. On a phone that is opening a session as the network flaps. It is retried now, with
+backoff, until it loads or another session opens. Opening fresh sessions and dropping the
+connection 0-0.6 s later showed the error screen 20 times in 24; now none, and every one loads.
+
+Ocelot-Patch: web/transcript-retry
+
+diff --git a/packages/app/src/session/timeline/model.ts b/packages/app/src/session/timeline/model.ts
+index 0663730b2deac72c9ef5c0184dda5e6d3460580d..25ecebfec959a5b2a3f52fbeb5818566b7675d1f 100644
+--- a/packages/app/src/session/timeline/model.ts
++++ b/packages/app/src/session/timeline/model.ts
+@@ -1,4 +1,5 @@
+ import { createMemo, createResource, type Accessor } from "solid-js"
++import { ClientError } from "@opencode/client"
+ import type { SessionMessageInfo } from "@opencode/client/promise"
+ import { useData } from "@/runtime/server/current"
+ import type { SessionModel } from "../model"
+@@ -14,7 +15,19 @@ export function createTimelineModel(input: { session: Pick<SessionModel, "identi
+     async (id) => {
+       if (!id) return
+       const owner = input.session.ownership.capture()
+-      await Promise.all([data.session.message.sync(id), data.session.pending.sync(id)])
++      // ocelot: a connection lost while the transcript loads is retried. An error here reached the
++      // app's error screen (`ready` reads the resource while nothing is shown yet), which stayed
++      // until a manual reload: on a phone, opening a session as the network flapped.
++      for (let wait = 250; ; wait = Math.min(wait * 2, 4_000)) {
++        try {
++          await Promise.all([data.session.message.sync(id), data.session.pending.sync(id)])
++          break
++        } catch (error) {
++          if (!(error instanceof ClientError && error.reason === "Transport")) throw error
++          await new Promise((resolve) => setTimeout(resolve, wait))
++          if (input.session.identity.sessionID() !== id) return
++        }
++      }
+       await enrichLeadingTurn({
+         current: owner.current,
+         messages: () => data.session.message.list(id),

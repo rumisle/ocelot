@@ -1,0 +1,192 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 10 Oct 2026 22:19:34 +0800
+Subject: web/tab-position: switching tabs keeps each session's place
+
+Coming back to a session's tab opened it at the bottom: upstream pins the bottom whenever the
+session changes, the saved place was restored only once per page load, and the next save then
+forgot it. Leaving a session now saves its place (and whether it was following) while its rows
+are still on screen, and opening it again restores that place; one left at the bottom stays
+there. The bottom pin on a session change waits for the restore, as the hash scroll already did.
+
+The restore runs before the next paint: placed, then corrected once against real layout (the
+first estimate missed by the header height), so the first frame of the returning session already
+shows the place instead of the bottom and then a jump. It waits for the returning view to
+register (restoring with the previous session's view failed).
+
+Ocelot-Patch: web/tab-position
+
+diff --git a/packages/app/src/session/timeline/interaction.ts b/packages/app/src/session/timeline/interaction.ts
+index 4435151cb1fd470479b326cb9aa87fa99598bdc4..1d098250ca721941971bf1ea557e3022bb76ad05 100644
+--- a/packages/app/src/session/timeline/interaction.ts
++++ b/packages/app/src/session/timeline/interaction.ts
+@@ -1,7 +1,7 @@
+ import type { SessionMessageUser } from "@opencode/client/promise"
+ import { createResizeObserver } from "@solid-primitives/resize-observer"
+ import { useLocation } from "@solidjs/router"
+-import { createEffect, createSignal, on, onCleanup } from "solid-js"
++import { createComputed, createEffect, createSignal, on, onCleanup, untrack } from "solid-js"
+ import { createStore } from "solid-js/store"
+ import { useLayout } from "@/shell/state/layout"
+ import type { SessionModel } from "../model"
+@@ -32,7 +32,12 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+   })
+   // The single source of truth for "follow the newest content". The virtualizer pins and unpins
+   // it from scroll geometry; everything else only expresses explicit intent.
+-  const pinned = () => state.follow.sessionKey !== session.identity.sessionKey() || state.follow.pinned
++  const pinned = () => {
++    const key = session.identity.sessionKey()
++    // ocelot: a session left for another tab keeps whether it was following (web/tab-position).
++    return state.follow.sessionKey === key ? state.follow.pinned : (leftFollowing.get(key) ?? true)
++  }
++  const leftFollowing = new Map<string, boolean>()
+   const pin = () => setState("follow", { sessionKey: session.identity.sessionKey(), pinned: true })
+   const unpin = () => {
+     if (!scroller || scroller.scrollHeight - scroller.clientHeight <= 1) return
+@@ -50,9 +55,12 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+   let historyContinuationFrame: number | undefined
+   // ocelot: remember where the timeline was left (position-memory.ts) and reopen it there after a
+   // reload. Saved shortly after scrolling and when the page hides (iOS may discard it unannounced);
+-  // following the newest content saves "at the bottom". Restored once per session per page load,
+-  // unless a message link or a pending jump already decides where to go.
++  // following the newest content saves "at the bottom". Restored once each time the session opens
++  // (a page load, coming back to its tab), unless a message link or a pending jump decides.
+   let positionApi: PositionApi | undefined
++  // ocelot: the session whose view registered positionApi (a view returning to screen registers
++  // again; restoring with the previous session's view fails, and the timeline fell to the bottom).
++  const [positionKey, setPositionKey] = createSignal<string>()
+   let restoringUntil = 0
+   let saveTimer: ReturnType<typeof setTimeout> | undefined
+   let restorePages = 0
+@@ -73,6 +81,32 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+     const position = positionApi?.capture()
+     if (position) writePosition(key, position)
+   }
++  // ocelot: switching tabs keeps each session's view alive, but the follow state and the restore
++  // belong to the session on screen: coming back followed the bottom (the default for a session
++  // without follow state), and the next save forgot the place. Leaving a session saves its place
++  // while its rows are still on screen (before the new session renders) and restores it on return.
++  const leavePosition = (key: string) => {
++    clearTimeout(saveTimer)
++    if (restored.has(key) && performance.now() >= restoringUntil) {
++      const following = state.follow.sessionKey !== key || state.follow.pinned
++      leftFollowing.set(key, following)
++      const position = following ? undefined : positionApi?.capture()
++      if (following || position) writePosition(key, position)
++    }
++    restored.delete(key)
++    restoringUntil = 0
++    restorePages = 0
++    restoreJumped = false
++  }
++  // Not `on`'s previous value: with `defer` it is undefined on the first change.
++  let shownKey = session.identity.sessionKey()
++  createComputed(() => {
++    const key = session.identity.sessionKey()
++    if (key === shownKey) return
++    untrack(() => leavePosition(shownKey))
++    shownKey = key
++  })
++  onCleanup(() => leavePosition(shownKey))
+   const scheduleSavePosition = () => {
+     clearTimeout(saveTimer)
+     saveTimer = setTimeout(savePosition, 300)
+@@ -89,7 +123,7 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+   })
+   createEffect(() => {
+     const key = session.identity.sessionKey()
+-    if (!session.identity.params.id || !timeline.ready() || restored.has(key)) return
++    if (!session.identity.params.id || !timeline.ready() || restored.has(key) || positionKey() !== key) return
+     const target = readPosition(key)
+     if (!target || location.hash || state.pendingMessage) {
+       restored.add(key)
+@@ -123,10 +157,9 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+     restorePages = 0
+     restoreJumped = false
+     restoringUntil = performance.now() + 1_500
+-    requestAnimationFrame(() => {
+-      setState("follow", { sessionKey: key, pinned: false })
+-      if (!positionApi?.restore(target)) restoringUntil = 0
+-    })
++    // At once, before the next paint: a frame later the view first showed wherever it was.
++    setState("follow", { sessionKey: key, pinned: false })
++    if (!positionApi?.restore(target)) restoringUntil = 0
+   })
+   // ocelot: on iOS the virtualizer defers scroll corrections until scrolling stops, so a page of
+   // history prepended mid-scroll first shows older content, then snaps back. Hold the page until
+@@ -327,7 +360,8 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+     on(
+       session.identity.sessionKey,
+       () => {
+-        pin()
++        // ocelot: a session with a saved place opens there (web/tab-position), not at the bottom.
++        if (!restoringPlace()) pin()
+         setState("messageID", undefined)
+         setState("pendingMessage", undefined)
+         setState("scroll", { overflow: false, jump: false })
+@@ -340,6 +374,7 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+       () => session.identity.params.id,
+       (id, previous) => {
+         if (!id || !previous || id === previous || state.messageID || state.pendingMessage || location.hash) return
++        if (restoringPlace()) return
+         pin()
+         scrollToEnd()
+       },
+@@ -438,6 +473,7 @@ export function createSessionTimelineInteraction(session: SessionModel) {
+       },
+       setPositionApi: (api: PositionApi) => {
+         positionApi = api
++        setPositionKey(session.identity.sessionKey())
+       },
+       unpin,
+     },
+diff --git a/packages/app/src/session/timeline/virtualizer.tsx b/packages/app/src/session/timeline/virtualizer.tsx
+index e44c186f1cc7b298b307d696c9da6f218749e6a3..7926c5f747144b2db67abbc5d7ce98e84cb9eaa0 100644
+--- a/packages/app/src/session/timeline/virtualizer.tsx
++++ b/packages/app/src/session/timeline/virtualizer.tsx
+@@ -490,27 +490,33 @@ export function createTimelineVirtualizer(input: Input) {
+       if (root && start !== undefined) root.scrollTop = start
+       return current >= 0
+     }
+-    toRow()
+     const scrolls = userScrolls
+     let frames = 0
+     let stable = 0
+-    const refine = () => {
++    // Against real layout: the row's start is estimated until rows around it are measured.
++    const correct = () => {
+       const root = listRoot()
+-      if (!active() || !root || userScrolls !== scrolls) return
++      if (!active() || !root || userScrolls !== scrolls) return false
+       const element = virtualContent?.querySelector<HTMLElement>(`[data-timeline-key="${CSS.escape(key)}"]`)
+       if (!element) {
+-        if (!toRow()) return
++        if (!toRow()) return false
+         stable = 0
+-      } else {
+-        const line = root.getBoundingClientRect().top + topOffset()
+-        const delta = element.getBoundingClientRect().top - (line - offset)
+-        if (Math.abs(delta) > 1) {
+-          root.scrollTop += delta
+-          stable = 0
+-        } else stable++
++        return true
+       }
+-      if (stable < 3 && ++frames < 90) requestAnimationFrame(refine)
++      const line = root.getBoundingClientRect().top + topOffset()
++      const delta = element.getBoundingClientRect().top - (line - offset)
++      if (Math.abs(delta) > 1) {
++        root.scrollTop += delta
++        stable = 0
++      } else stable++
++      return true
+     }
++    const refine = () => {
++      if (correct() && stable < 3 && ++frames < 90) requestAnimationFrame(refine)
++    }
++    // Placed and corrected before the next paint, so the first frame shows the place.
++    toRow()
++    correct()
+     requestAnimationFrame(refine)
+     return true
+   }

@@ -194,6 +194,22 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
          Repro: test/flicker-webkit.py in podman mcr.microsoft.com/playwright/python:v1.63.0-noble
          (samples the top row every frame). Programmatic scrollBy without a wheel/touch never unpins,
          so tests must send the intent first. Confirm on the phone (2.0.19-8+).
+   - [x] Slow history over a high-latency link (2.0.22-6). A read during a reply returned the block
+         empty until it ended (text is stored on `*.ended`), so a reconnect mid-reply showed it garbled;
+         restoring far back walked 20-message pages; a reconnect refetched everything loaded. Patches
+         `core/message-sync` (streamed text in reads, deltas with their offset, a delta sync route) and
+         `web/history-sync` (delta resync, an IndexedDB cache verified against server update times,
+         one-request restore, the place kept by several rows' keys). At 165 ms / 1.2 MB/s: reload ~80
+         messages back 6 s → 0.35 s, ~1400 back never → 0.5 s, reconnect mid-reply garbled → exact.
+   - [x] Bottom felt sticky, and "Jump to latest" bounced after waking (patch `web/timeline-follow`):
+         rows below shrinking clamped a just-scrolled-up view onto the end, which re-pinned it; also
+         TanStack kept steering to a scrollToEnd target after the user scrolled. Repro: 6/6 stuck before,
+         0/6 after.
+   - [x] Switching tabs opened the session at the bottom (patch `web/tab-position`): upstream pins on
+         every session change. The place is saved on leaving and restored before the first paint.
+   - [x] A connection lost while a transcript loads showed the app's error screen until a reload
+         (patch `web/transcript-retry`, upstream bug): 20/24 → 0/24, retried with backoff.
+   - [ ] Confirm on the phone (WebKit/iOS momentum not covered by the Chromium tests).
    - [ ] Orientation while scrolling back: e.g. a sticky "which turn am I in" header or
          scrubber with turn positions.
 2. **Edit/branches polish.**

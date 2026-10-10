@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Sat, 10 Oct 2026 21:21:40 +0800
+Subject: web/timeline-follow: scrolling up wins over following the bottom
+
+Two things pulled a reader back to the bottom right after they scrolled up, until they got
+further away than the content moved: what made "Jump to latest" bounce back and forth after
+waking the app, and the bottom feel sticky while a reply streamed.
+
+Following resumed whenever the content shrank under a viewport at the end. Rows below that are
+measured smaller (fresh after waking or a jump), or a reply's status spacer going away, clamp a
+viewport that was just scrolled up onto the end; that is not arriving there. Shrinking now counts
+only for a viewport that was at the end before, as the rule's comment already said.
+
+TanStack keeps steering to a scrollToEnd / scrollToIndex target until it holds still (up to 5 s)
+and re-aims whenever a row's size changes. Wheel, touch, scroll keys and scrollbar drags now drop
+that target, and stop a place being restored. There is no public cancel, and scrolling to the
+current offset would write scrollTop, which stops iOS momentum.
+
+Ocelot-Patch: web/timeline-follow
+
+diff --git a/packages/app/src/session/timeline/virtualizer.tsx b/packages/app/src/session/timeline/virtualizer.tsx
+index 508ed5c8e524fb6459ff9cc6e008137f0adc9399..e44c186f1cc7b298b307d696c9da6f218749e6a3 100644
+--- a/packages/app/src/session/timeline/virtualizer.tsx
++++ b/packages/app/src/session/timeline/virtualizer.tsx
+@@ -335,6 +335,18 @@ export function createTimelineVirtualizer(input: Input) {
+     flushTouchAdjustment()
+   }
+ 
++  // ocelot: the user's own scrolling wins over a scroll command still in progress. TanStack keeps
++  // steering to the target of scrollToEnd / scrollToIndex until it holds still for a frame (up to
++  // 5 s), and re-aims whenever a row's size changes: with rows still being measured (back from
++  // sleep, a reply streaming), it pulled the view back each time and the reader could not leave the
++  // bottom, or the message navigated to. There is no public cancel, and a scrollToOffset to the
++  // current place would write scrollTop, which stops iOS momentum.
++  let userScrolls = 0
++  function yieldToUser() {
++    userScrolls++
++    ;(virtualizer as unknown as { scrollState: unknown }).scrollState = null
++  }
++
+   function prepareNavigation() {
+     if (touchStart === undefined) touchScrolling = false
+     flushTouchAdjustment()
+@@ -426,6 +438,7 @@ export function createTimelineVirtualizer(input: Input) {
+     const root = listRoot()
+     if (!active() || !root) return
+     prepareNavigation()
++    yieldToUser()
+     if (direction < 0) input.onUnpin()
+     root.scrollBy({ top: direction * root.clientHeight * 0.85 })
+   }
+@@ -478,11 +491,12 @@ export function createTimelineVirtualizer(input: Input) {
+       return current >= 0
+     }
+     toRow()
++    const scrolls = userScrolls
+     let frames = 0
+     let stable = 0
+     const refine = () => {
+       const root = listRoot()
+-      if (!active() || !root) return
++      if (!active() || !root || userScrolls !== scrolls) return
+       const element = virtualContent?.querySelector<HTMLElement>(`[data-timeline-key="${CSS.escape(key)}"]`)
+       if (!element) {
+         if (!toRow()) return
+@@ -596,6 +610,7 @@ export function createTimelineVirtualizer(input: Input) {
+   // the end must stop following, even though the resulting position still looks like the end.
+   const handleListWheel = (event: WheelEvent & { currentTarget: HTMLDivElement }) => {
+     input.onUserScroll(event.target)
++    if (event.deltaY !== 0) yieldToUser()
+     if (event.deltaY < 0) input.onUnpin()
+   }
+ 
+@@ -625,6 +640,7 @@ export function createTimelineVirtualizer(input: Input) {
+     // A retained target can outlive its whole session view. Only the active
+     // timeline may change the shared follow state; release still cleans up below.
+     if (!active()) return
++    if (current !== previous && !touchNested) yieldToUser()
+     // Dragging the content downward reveals earlier messages.
+     if (current <= previous) return
+     // A nested scrollport owns the intent. If it chains into the timeline at a
+@@ -671,6 +687,7 @@ export function createTimelineVirtualizer(input: Input) {
+     if (!isScrollKeyTarget(event.target, key)) return
+     if (scrollKeyOwner(event.currentTarget, event.target, key) !== event.currentTarget) return
+     input.onUserScroll(event.currentTarget)
++    yieldToUser()
+     if (upwardKeys.has(key)) input.onUnpin()
+   }
+ 
+@@ -685,9 +702,17 @@ export function createTimelineVirtualizer(input: Input) {
+     scrollTop = root.scrollTop
+     maxScroll = root.scrollHeight - root.clientHeight
+     const atEnd = maxScroll - scrollTop <= endEpsilon
+-    const arrived = scrollTop > previousTop + endEpsilon || maxScroll < previousMaxScroll
++    // ocelot: shrinking only counts for a viewport that was at the end. One that the browser clamped
++    // onto the end (rows below measured smaller, a reply's status spacer gone) belongs to a reader
++    // who just scrolled up: following again pulled them back down until they got further away than
++    // the shrink, and right after "Jump to latest" it bounced back and forth while rows settled.
++    const wasAtEnd = previousMaxScroll - previousTop <= endEpsilon
++    const arrived = scrollTop > previousTop + endEpsilon || (maxScroll < previousMaxScroll && wasAtEnd)
+     if (maxScroll <= 1 || (atEnd && arrived)) input.onPin()
+-    else if ((pointerHeld || touchScrolling) && scrollTop < previousTop - endEpsilon) input.onUnpin()
++    else if ((pointerHeld || touchScrolling) && scrollTop < previousTop - endEpsilon) {
++      yieldToUser()
++      input.onUnpin()
++    }
+     settleColdBottom()
+     input.onScheduleScrollState(root)
+     input.onHistoryScroll()
