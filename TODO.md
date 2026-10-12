@@ -51,6 +51,12 @@ Open:
       Accepted: the restarted server inherits the waiter's environment (the old server's, or the
       shell that ran install.sh), not a fresh login shell as the systemd unit gives.
 
+## Bugs seen in use
+
+- [ ] Read tool, images: a newly written image often reads as "File not found" for several seconds although `ls`
+      shows it, and a path written again keeps returning the old image. Looks like a stale stat/content cache
+      keyed by path. Workaround: a new filename per image, and wait ~8 s. Seen 2026-10-13 (paw captcha work).
+
 ## Testing
 
 - Never test against real models. Use a fake provider (like opencode-octopi's
