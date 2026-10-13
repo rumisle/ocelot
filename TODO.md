@@ -337,3 +337,33 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
   trycua/cua (cua-driver).
 - Cheapest experiment: run `ocu` on the machine to control and call it from the server over a
   remote shell (or its MCP over stdio). No new code. Stepping in happens at that machine.
+
+## 7. Backlog from 2026-10-13 (not started)
+
+1. **Archive sessions.** Old conversations pile up in the session list. Want a way to archive
+   them (hide from the list, keep them retrievable). Upstream's session schema already has
+   `time.archived` (`time_archived` column, carried over from v1); check what v2 still does with it
+   (API, web app, TUI) before adding anything.
+2. **Worktree feature: what is it?** Find out what upstream's worktree support does and how it is
+   used (plugin API `packages/plugin/src/worktree.ts`, workspace menu in `gui-extensions/src/summary`,
+   `app/src/workspaces`), and whether it is worth using here.
+3. **Subagent list.** Today a child session (e.g. an octopi worker) is reachable only from the card under
+   the tool call that names it (web/child-session-cards); one spawned or used in a call that doesn't
+   name it, or far back in the transcript, is hard to find. Upstream's web app only links child → parent
+   (breadcrumb in `session-identity-header.tsx`), nothing parent → children. Want a list of a session's
+   children (sessions with `parentID` = this one, recursively) with state (running / idle / closed),
+   title, model, cost; tap opens it. UI not decided. Options: a popover from the session header
+   (next to the context circle, like web/session-header-meta), a "Subagents" tab beside
+   Session/Changes/Files/Terminal, or a side panel. Keep it generic (any child session, no octopi code).
+4. **Full-text session search, like [fast-resume](https://github.com/angristan/fast-resume).** fast-resume
+   (Rust, Tantivy) indexes local agent history (titles, directories, user and assistant messages) with
+   typo-tolerant ranking, filters (`agent:`, `dir:`, `date:<2d`), a preview, and `fr --json` for agents.
+   Upstream's session list search is title-only (`LIKE` on the title, `core/src/session/store.ts`).
+   Want, over ocelot's own sessions:
+   - Web UI: a search/jump palette (query → matching sessions with the hit in context → open at that
+     message). Fits with the keyboard work (backlog 5.10, "a picker for sessions beyond the tabs").
+   - A tool the model can call: search past sessions (query, directory, date, limit/offset) and read
+     the matching excerpt or messages, e.g. "what did we decide about X last week".
+   Open: index in the server's SQLite (FTS5, kept current on message writes) vs. a separate index;
+   include archived sessions (item 1) and child sessions (item 3)? Possibly just use fast-resume
+   itself for other agents' history.
