@@ -66,6 +66,12 @@ Open:
       (rescan only on `.claude`/`.agents` events, announce only real changes). Dev server: 4 junk writes in the
       config dir 8 events → 0; a real skill edit still 1 per location; no watches above `$HOME`.
 
+- [ ] Reconnect resync fan-out: after every (re)connect the web app re-syncs every directory it holds (up to 30,
+      20 min idle; `app/src/runtime/server/global-sync/queue.ts`, 2 at a time), ~10 endpoints each (provider, model,
+      agent, command, skill, reference, mcp, vcs, shell, ...). Seen 2026-10-14 after a server restart: 1265 requests,
+      extra rounds from cold locations' `agent.updated` / `config.updated` re-queueing them. Re-sync only the shown
+      location on reconnect; the others when next shown.
+
 ## Testing
 
 - Never test against real models. Use a fake provider (like opencode-octopi's
