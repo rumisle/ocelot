@@ -47,3 +47,4 @@ web/tab-position.patch
 core/config-home-boundary.patch
 core/quiet-skill-reload.patch
 web/request-priority.patch
+web/catalog-events.patch

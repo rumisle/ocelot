@@ -1,14 +1,18 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: rumisle <why-excuse-quail@duck.com>
 Date: Wed, 14 Oct 2026 11:04:41 +0800
-Subject: web/request-queue: writes go ahead of waiting reads
+Subject: web/request-queue: writes go first; more parallel reads over HTTP/2
 
-The app sends at most 4 API requests at a time, first come first served. After
-a reconnect it re-syncs every directory it holds (about ten catalog reads
-each), so on a slow link a prompt sent then waited behind ~200 reads: about a
-minute before the server even saw it. Anything that is not a GET or HEAD
-(sending a prompt, answering a permission, stopping a run) now goes ahead of
-the waiting reads, like transcript reads already do.
+The app sends at most 4 API requests at a time, first come first served, to
+stay inside HTTP/1.1's six connections per origin. After a reconnect it
+re-syncs every directory it holds (about ten catalog reads each), so on a slow
+link a prompt sent then waited behind ~200 reads: about a minute before the
+server even saw it.
+
+Anything that is not a GET or HEAD (sending a prompt, answering a permission,
+stopping a run) now goes ahead of the waiting reads, like transcript reads
+already do. When the page itself came over HTTP/2 or HTTP/3, requests to its
+origin share one connection, so the limit there is 16.
 
 Ocelot-Patch: web/request-priority
 
@@ -48,10 +52,34 @@ index 089e76ea14f6bb92c6f0a21b2ea7d2bda9e5c5cc..aa7e965fa79b1192582dadd5a658f9b4
      const input = setup({ limit: 1 })
      const paths = [
 diff --git a/packages/app/src/runtime/server/request-queue.ts b/packages/app/src/runtime/server/request-queue.ts
-index aefa4b3d13b12a42cdfb036981379d064ad5043b..5cc54712b76ab9176834ce3f483497bfa1082457 100644
+index aefa4b3d13b12a42cdfb036981379d064ad5043b..3bf55a0195c95c34853d9c6d60ffb5535f1433f7 100644
 --- a/packages/app/src/runtime/server/request-queue.ts
 +++ b/packages/app/src/runtime/server/request-queue.ts
-@@ -29,6 +29,9 @@ export const setupRequestHeadersTimeoutMs = 10 * 60_000
+@@ -5,6 +5,23 @@ type Entry = { method: string; url: string; at: number; slow: boolean; urgent?:
+ // a burst stalls probes and user actions inside the browser where nothing can observe it.
+ export const requestQueueLimit = 4
+ 
++// ocelot: over HTTP/2 or HTTP/3 every request shares one connection, so the six-connection budget
++// above does not apply; on a slow link four at a time turned a reconnect's few hundred small reads
++// into a minute of queueing. Still bounded, so a burst does not swamp the server.
++export const multiplexedRequestQueueLimit = 16
++
++// The page's own protocol; API requests to the page's origin travel the same way.
++function multiplexed(url: string) {
++  try {
++    if (typeof location === "undefined" || typeof performance === "undefined") return false
++    if (new URL(url).origin !== location.origin) return false
++    const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined
++    return /^h[23]/.test(navigation?.nextHopProtocol ?? "")
++  } catch {
++    return false
++  }
++}
++
+ // Endpoints that shell out to git or walk the filesystem take seconds on a large repository. They
+ // may hold at most this many slots, so a session mount's small reads never queue behind them.
+ export const requestQueueSlowLimit = 2
+@@ -29,6 +46,9 @@ export const setupRequestHeadersTimeoutMs = 10 * 60_000
  const urgentRequestPath = /^\/api\/session\/[^/]+\/(message|message-sync|message\/[^/]+)$/
  
  export function isUrgentRequest(method: string, pathname: string) {
@@ -61,3 +89,21 @@ index aefa4b3d13b12a42cdfb036981379d064ad5043b..5cc54712b76ab9176834ce3f483497bf
    return method === "GET" && urgentRequestPath.test(pathname)
  }
  
+@@ -50,7 +70,7 @@ export function createRequestQueue(input: {
+   log?: (message: string, data: Record<string, unknown>) => void
+   now?: () => number
+ }) {
+-  const limit = input.limit ?? requestQueueLimit
++  let limit = input.limit ?? requestQueueLimit
+   const slowLimit = input.slowLimit ?? requestQueueSlowLimit
+   const stallMs = input.stallMs ?? requestStallMs
+   const headersTimeoutMs = input.headersTimeoutMs ?? requestHeadersTimeoutMs
+@@ -116,6 +136,8 @@ export function createRequestQueue(input: {
+     async (resource: RequestInfo | URL, init?: RequestInit) => {
+       const request = new Request(resource, init)
+       const pathname = new URL(request.url).pathname
++      if (input.limit === undefined && limit === requestQueueLimit && multiplexed(request.url))
++        limit = multiplexedRequestQueueLimit
+       // The event stream is long-lived; never count it against the request budget.
+       if (pathname === "/api/event") return base(request)
+       const entry = {
