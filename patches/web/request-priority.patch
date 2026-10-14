@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Wed, 14 Oct 2026 11:04:41 +0800
+Subject: web/request-queue: writes go ahead of waiting reads
+
+The app sends at most 4 API requests at a time, first come first served. After
+a reconnect it re-syncs every directory it holds (about ten catalog reads
+each), so on a slow link a prompt sent then waited behind ~200 reads: about a
+minute before the server even saw it. Anything that is not a GET or HEAD
+(sending a prompt, answering a permission, stopping a run) now goes ahead of
+the waiting reads, like transcript reads already do.
+
+Ocelot-Patch: web/request-priority
+
+diff --git a/packages/app/src/runtime/server/request-queue.test.ts b/packages/app/src/runtime/server/request-queue.test.ts
+index 089e76ea14f6bb92c6f0a21b2ea7d2bda9e5c5cc..aa7e965fa79b1192582dadd5a658f9b4d4ac9c02 100644
+--- a/packages/app/src/runtime/server/request-queue.test.ts
++++ b/packages/app/src/runtime/server/request-queue.test.ts
+@@ -55,6 +55,30 @@ describe("createRequestQueue", () => {
+     expect(input.queue.inflight()).toBe(0)
+   })
+ 
++  test("ocelot: a prompt or any other write goes ahead of a queue of catalog reads", async () => {
++    const input = setup({ limit: 1 })
++    const reads = ["/api/project", "/api/provider", "/api/model", "/api/skill"]
++    const responses = reads.map((path) => input.queue.fetch(`http://server${path}`))
++    responses.push(input.queue.fetch("http://server/api/session/ses_a/prompt", { method: "POST" }))
++    responses.push(input.queue.fetch("http://server/api/session/ses_a/interrupt", { method: "POST" }))
++    const started: string[] = []
++    for (let index = 0; index < reads.length + 2; index++) {
++      await input.settle()
++      const item = input.pending[index]!
++      started.push(new URL(item.url).pathname)
++      item.resolve()
++    }
++    await Promise.all(responses)
++    expect(started).toEqual([
++      "/api/project",
++      "/api/session/ses_a/prompt",
++      "/api/session/ses_a/interrupt",
++      "/api/provider",
++      "/api/model",
++      "/api/skill",
++    ])
++  })
++
+   test("ocelot: transcript reads go ahead of other waiting requests, in their own order", async () => {
+     const input = setup({ limit: 1 })
+     const paths = [
+diff --git a/packages/app/src/runtime/server/request-queue.ts b/packages/app/src/runtime/server/request-queue.ts
+index aefa4b3d13b12a42cdfb036981379d064ad5043b..5cc54712b76ab9176834ce3f483497bfa1082457 100644
+--- a/packages/app/src/runtime/server/request-queue.ts
++++ b/packages/app/src/runtime/server/request-queue.ts
+@@ -29,6 +29,9 @@ export const setupRequestHeadersTimeoutMs = 10 * 60_000
+ const urgentRequestPath = /^\/api\/session\/[^/]+\/(message|message-sync|message\/[^/]+)$/
+ 
+ export function isUrgentRequest(method: string, pathname: string) {
++  // ocelot: so does anything that is not a read (sending a prompt, answering a permission,
++  // stopping a run): behind a reconnect's catalog re-sync it waited a minute on a slow link.
++  if (method !== "GET" && method !== "HEAD") return true
+   return method === "GET" && urgentRequestPath.test(pathname)
+ }
+ 
