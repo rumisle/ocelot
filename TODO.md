@@ -57,14 +57,14 @@ Open:
       shows it, and a path written again keeps returning the old image. Looks like a stale stat/content cache
       keyed by path. Workaround: a new filename per image, and wait ~8 s. Seen 2026-10-13 (paw captcha work).
 
-- [ ] Web app polls `/api/skill` and `/api/provider` for many worktree locations at ~2-3 requests/s, nonstop.
-      Measured on the real server's event stream (2026-10-14, 15 s): 143 `skill.updated`, one for each of ~48 live
-      locations every ~4 s, all at once; the client refetches `/api/skill` for each (`client/src/solid/data.ts`,
-      `skill.updated`). Global trigger: skills come from `~/.agents/skills` (`config/plugin/compatibility.ts`), whose
-      recursive watcher reloads every location's skills on any change below it (100 ms debounce, no path filter,
-      notifies even when nothing changed). Something there changes every few seconds; not yet found. Also cold
-      locations booting (`provider.updated` + `model.updated`) for worktrees that showed up empty at first. Fix ideas:
-      only react to `*.md` changes, skip notify when the skill set is unchanged, refetch only shown locations.
+- [x] Web app polled `/api/skill` and `/api/provider` for every worktree location, ~2-3 requests/s nonstop
+      (2026-10-14). Server-side loop: config discovery climbed to `/`, and on the autofs `/home` each lookup of a
+      missing `/home/.agents` etc. mounts and unmounts it, which the watch on `/home` reported as a config change,
+      whose reload looked the names up again; the compatibility plugin rescanned `~/.agents/skills` on every raw
+      config event and always announced `skill.updated`, and the client refetched per location. Fixed by
+      `core/config-home-boundary` (locations inside `$HOME` stop the walk there) and `core/quiet-skill-reload`
+      (rescan only on `.claude`/`.agents` events, announce only real changes). Dev server: 4 junk writes in the
+      config dir 8 events → 0; a real skill edit still 1 per location; no watches above `$HOME`.
 
 ## Testing
 

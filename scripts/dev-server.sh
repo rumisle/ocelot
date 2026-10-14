@@ -5,6 +5,7 @@
 #   scripts/dev-server.sh start [binary]   # default: dist/ocelot-<host>/ocelot (scripts/build.sh)
 #   scripts/dev-server.sh stop
 #   . /tmp/ocelot-dev/env.sh               # then: A get /api/session, prompt <session> "LINES 40"
+#   DEV_HOME=1 scripts/dev-server.sh start # HOME=$E/home, so ~/.agents, ~/.claude are throwaway too
 #
 # The web UI is served at $URL (sign in with username opencode, password test).
 source "$(dirname "$0")/lib.sh"
@@ -31,7 +32,7 @@ BUN=$(command -v bun || true)
 [ -n "$BUN" ] || BUN=$(bun_bin)
 
 stop
-rm -rf "$E" && mkdir -p "$E"/{config/opencode,data,state,cache,work}
+rm -rf "$E" && mkdir -p "$E"/{config/opencode,data,state,cache,work,home}
 cat > "$E/config/opencode/opencode.jsonc" <<EOF
 {
   "\$schema": "https://opencode.ai/config.json",
@@ -43,6 +44,7 @@ cat > "$E/env.sh" <<EOF
 export XDG_CONFIG_HOME=$E/config XDG_DATA_HOME=$E/data XDG_STATE_HOME=$E/state XDG_CACHE_HOME=$E/cache
 export OPENCODE_SERVER_PASSWORD=test ANTHROPIC_API_KEY=sk-ant-fake FAKE_PORT=$FAKE
 export OC=$OC URL=http://127.0.0.1:$PORT E=$E
+${DEV_HOME:+export HOME=$E/home}
 A() { "\$OC" api --server "\$URL" "\$@"; }
 # session [title] -> new session id
 session() { A post /api/session -d "{\"title\":\"\${1:-dev}\",\"model\":{\"id\":\"claude-opus-5-5\",\"providerID\":\"anthropic\"},\"location\":{\"directory\":\"$E/work\"}}" | jq -r '.data.id // .id'; }

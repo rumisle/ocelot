@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Wed, 14 Oct 2026 10:48:41 +0800
+Subject: core/skills: rescan only on relevant events, announce only real
+ changes
+
+The compatibility plugin (~/.agents, ~/.claude skills) rescanned on every raw
+event from the config watches, and both skill plugins called skill.reload()
+after every rescan, which publishes skill.updated even when nothing changed.
+Each one made every web client refetch /api/skill for every open location: a
+stray file written in ~/.config/opencode, or the autofs loop above, meant
+nonstop requests.
+
+The compatibility plugin now reacts only to config watch events under a
+.claude or .agents path (a root appearing or going away), and both plugins
+reload the skill state only when the rescanned skills differ.
+
+Ocelot-Patch: core/quiet-skill-reload
+
+diff --git a/packages/core/src/config/plugin/compatibility.ts b/packages/core/src/config/plugin/compatibility.ts
+index c25cbce42dfa30d643cee626c1ea5db29c7b7c7f..aaa4ec33bb899d3e09942a27b01e30d9f9fdb4f3 100644
+--- a/packages/core/src/config/plugin/compatibility.ts
++++ b/packages/core/src/config/plugin/compatibility.ts
+@@ -54,19 +54,26 @@ export const Plugin = define({
+             if (parsed._tag === "Parsed") loaded.set(parsed.skill.id, parsed.skill)
+           }
+         }
++        // ocelot: report whether the skills changed, so an unchanged rescan stays silent.
++        const before = JSON.stringify(skills)
+         skills.splice(0, skills.length, ...loaded.values())
++        return JSON.stringify(skills) !== before
+       },
+       (effect) => lock.withPermit(effect),
+     )
+ 
+-    const reload = refresh().pipe(Effect.andThen(ctx.skill.reload()))
++    const reload = refresh().pipe(Effect.flatMap((changed) => (changed ? ctx.skill.reload() : Effect.void)))
+     const updates = yield* PubSub.subscribe(changes)
+     yield* Stream.fromSubscription(updates).pipe(
+       Stream.debounce("100 millis"),
+       Stream.runForEach(() => reload),
+       Effect.forkScoped({ startImmediately: true }),
+     )
++    // ocelot: only config watch events about a .claude or .agents root (one appearing or going
++    // away), not every raw event: a stray file in a config directory rescanned every location's
++    // skills, and an unchanged rescan still announced skill.updated.
+     yield* config.changes().pipe(
++      Stream.filter((update) => update.path.split(path.sep).some((part) => part === ".claude" || part === ".agents")),
+       Stream.runForEach(() => reload),
+       Effect.forkScoped({ startImmediately: true }),
+     )
+diff --git a/packages/core/src/config/plugin/skill.ts b/packages/core/src/config/plugin/skill.ts
+index 1338cab3400b81b42102807d3c80c7e40b07c5b6..0bb5f086caf9908f65d5ee5a0e34a26c8facfb4a 100644
+--- a/packages/core/src/config/plugin/skill.ts
++++ b/packages/core/src/config/plugin/skill.ts
+@@ -154,14 +154,18 @@ export const Plugin = define({
+         for (const source of current) {
+           for (const skill of yield* load(source)) skills.set(skill.id, skill)
+         }
++        // ocelot: report whether the skills changed, so an unchanged rescan stays silent.
++        const before = JSON.stringify(loaded.skills)
+         loaded.skills = Array.from(skills.values())
+-        if (file) {
++        const changed = JSON.stringify(loaded.skills) !== before
++        if (file && changed) {
+           yield* Effect.logInfo("skills rescanned", {
+             file,
+             sources: current.map(Skill.Source.key),
+             skills: loaded.skills.map((skill) => skill.id),
+           })
+         }
++        return changed
+       },
+       (effect, ..._args: [file?: string]) => lock.withPermit(effect),
+     )
+@@ -171,7 +175,9 @@ export const Plugin = define({
+     const updates = yield* PubSub.subscribe(changes)
+     yield* Stream.fromSubscription(updates).pipe(
+       Stream.debounce("100 millis"),
+-      Stream.runForEach((file) => refresh(file).pipe(Effect.andThen(ctx.skill.reload()))),
++      Stream.runForEach((file) =>
++        refresh(file).pipe(Effect.flatMap((changed) => (changed ? ctx.skill.reload() : Effect.void))),
++      ),
+       Effect.forkScoped({ startImmediately: true }),
+     )
+     yield* refresh()
+diff --git a/packages/core/test/config/skill.test.ts b/packages/core/test/config/skill.test.ts
+index d226842e9464e3f99378f57dc4363734b88f936f..b7874db41c56577eb3b8afff8bdf8d7801db65b7 100644
+--- a/packages/core/test/config/skill.test.ts
++++ b/packages/core/test/config/skill.test.ts
+@@ -402,7 +402,13 @@ describe("ConfigSkillPlugin.Plugin", () => {
+           expect(yield* watcher.subscriptions()).toEqual([{ path: path.join(tmp.path, "generated"), type: "file" }])
+ 
+           yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, "generated")))
+-          yield* emitAndWait({ type: "create", path: path.join(tmp.path, "generated") })
++          // ocelot: the rescan finds no skills yet, so it re-arms the watches without announcing
++          // skill.updated; wait for the watch on the next missing directory instead.
++          yield* watcher.emit({ type: "create", path: path.join(tmp.path, "generated") })
++          yield* Effect.gen(function* () {
++            while (!(yield* watcher.subscriptions()).some((item) => item.path === source))
++              yield* Effect.sleep("10 millis")
++          }).pipe(Effect.timeout("2 seconds"))
+           yield* Effect.promise(async () => {
+             await fs.mkdir(path.join(source, "deploy"), { recursive: true })
+             await write(source, "deploy", "Deploy")

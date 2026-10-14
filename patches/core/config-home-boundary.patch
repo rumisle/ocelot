@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: rumisle <why-excuse-quail@duck.com>
+Date: Wed, 14 Oct 2026 10:48:41 +0800
+Subject: core/config: a location inside home looks for config no higher than
+ home
+
+Config discovery walked from the location to /, checking .claude, .agents,
+.opencode and opencode.json(c) in every parent, and watched each missing one
+through its parent directory. On an autofs /home, looking up a missing
+/home/<name> mounts and unmounts it, which the watch on /home reports as a
+change; the config reload looks the names up again, so ~70 worktree locations
+reloaded every few seconds, forever.
+
+A location inside $HOME now stops the walk at $HOME; elsewhere it still goes to
+/. Config placed above the home directory no longer applies to locations
+inside it.
+
+Ocelot-Patch: core/config-home-boundary
+
+diff --git a/packages/core/src/config/discovery.ts b/packages/core/src/config/discovery.ts
+index 71c0c03d9b79f2dc12708ac26c48b15493a013e6..cb20da35c187fec72036244aaf54872266fd6084 100644
+--- a/packages/core/src/config/discovery.ts
++++ b/packages/core/src/config/discovery.ts
+@@ -30,10 +30,18 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
+   const globalRoots = yield* Effect.forEach([globalDirectory, globalClaudeDirectory, globalAgentsDirectory], (item) =>
+     fs.resolve(item),
+   )
++  // ocelot: a location inside the home directory stops the walk there. Above it are other users'
++  // homes or mount points: on an autofs /home, looking up a missing name mounts and unmounts it,
++  // which the watch on the missing name reports as a change, which reloads config, which looks
++  // it up again.
++  const home = path.resolve(global.home)
++  const insideHome = location.directory === home || location.directory.startsWith(home + path.sep)
+   const directories =
+     (yield* fs.resolve(location.directory)) === globalRoots[0] || options?.project === false
+       ? []
+-      : yield* fs.up({ targets: ["."], start: location.directory }).pipe(Effect.orDie)
++      : yield* fs
++          .up({ targets: ["."], start: location.directory, ...(insideHome ? { stop: home } : {}) })
++          .pipe(Effect.orDie)
+   const discovered = yield* Effect.forEach(directories, (directory) =>
+     Effect.gen(function* () {
+       // Resolve the parent too: missing children must honor symlinked global roots.
+diff --git a/packages/core/test/config/discovery-home.test.ts b/packages/core/test/config/discovery-home.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..fc609ebe33b52e808f99ed8816e2f66b56fa967f
+--- /dev/null
++++ b/packages/core/test/config/discovery-home.test.ts
+@@ -0,0 +1,64 @@
++import fs from "fs/promises"
++import path from "path"
++import { describe, expect } from "bun:test"
++import { Effect, Layer } from "effect"
++import { ConfigDiscovery } from "@opencode/core/config/discovery"
++import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
++import { Location } from "@opencode/core/location"
++import { AbsolutePath } from "@opencode/core/schema"
++import { FSUtil } from "@opencode/util/fs-util"
++import { Global } from "@opencode/util/global"
++import { LayerNode } from "@opencode/util/effect/layer-node"
++import { tmpdir } from "../fixture/tmpdir"
++import { location } from "../fixture/location"
++import { testEffect } from "../lib/effect"
++
++const it = testEffect(AppNodeBuilder.build(LayerNode.group([FSUtil.node])))
++
++const discover = (directory: string, home: string) =>
++  ConfigDiscovery.discover().pipe(
++    Effect.provideService(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
++    Effect.provide(Global.layerWith({ config: path.join(home, ".config", "opencode"), home })),
++  )
++
++const all = (sources: ConfigDiscovery.Sources) => [
++  ...sources.direct,
++  ...sources.project.map((root) => root.path),
++  ...sources.claude,
++  ...sources.agents,
++]
++
++describe("ConfigDiscovery.discover (ocelot: home boundary)", () => {
++  it.live("a location inside home looks for config no higher than home", () =>
++    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
++      Effect.flatMap((tmp) =>
++        Effect.gen(function* () {
++          const home = path.join(tmp.path, "home", "user")
++          const project = path.join(home, "work", "project")
++          yield* Effect.promise(() => fs.mkdir(project, { recursive: true }))
++          const sources = all(yield* discover(project, home))
++          expect(sources.length).toBeGreaterThan(0)
++          // Candidates in the project, its parents up to home, and home itself; nothing above.
++          expect(sources.filter((item) => !item.startsWith(home + path.sep))).toEqual([])
++          expect(sources).toContain(AbsolutePath.make(path.join(project, "opencode.json")))
++          expect(sources).toContain(AbsolutePath.make(path.join(home, "work", ".opencode")))
++        }),
++      ),
++    ),
++  )
++
++  it.live("a location outside home still looks all the way up", () =>
++    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
++      Effect.flatMap((tmp) =>
++        Effect.gen(function* () {
++          const home = path.join(tmp.path, "home", "user")
++          const project = path.join(tmp.path, "srv", "project")
++          yield* Effect.promise(() => fs.mkdir(project, { recursive: true }))
++          const sources = all(yield* discover(project, home))
++          expect(sources).toContain(AbsolutePath.make(path.join(tmp.path, "opencode.json")))
++          expect(sources).toContain(AbsolutePath.make(path.join(path.parse(project).root, "opencode.json")))
++        }),
++      ),
++    ),
++  )
++})

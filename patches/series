@@ -44,3 +44,5 @@ web/history-sync.patch
 web/timeline-follow.patch
 web/transcript-retry.patch
 web/tab-position.patch
+core/config-home-boundary.patch
+core/quiet-skill-reload.patch
