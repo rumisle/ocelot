@@ -57,6 +57,15 @@ Open:
       shows it, and a path written again keeps returning the old image. Looks like a stale stat/content cache
       keyed by path. Workaround: a new filename per image, and wait ~8 s. Seen 2026-10-13 (paw captcha work).
 
+- [ ] Web app polls `/api/skill` and `/api/provider` for many worktree locations at ~2-3 requests/s, nonstop.
+      Measured on the real server's event stream (2026-10-14, 15 s): 143 `skill.updated`, one for each of ~48 live
+      locations every ~4 s, all at once; the client refetches `/api/skill` for each (`client/src/solid/data.ts`,
+      `skill.updated`). Global trigger: skills come from `~/.agents/skills` (`config/plugin/compatibility.ts`), whose
+      recursive watcher reloads every location's skills on any change below it (100 ms debounce, no path filter,
+      notifies even when nothing changed). Something there changes every few seconds; not yet found. Also cold
+      locations booting (`provider.updated` + `model.updated`) for worktrees that showed up empty at first. Fix ideas:
+      only react to `*.md` changes, skip notify when the skill set is unchanged, refetch only shown locations.
+
 ## Testing
 
 - Never test against real models. Use a fake provider (like opencode-octopi's
@@ -367,3 +376,41 @@ Each removes an opencode-octopi ⚠️ workaround. Best candidates to upstream
    Open: index in the server's SQLite (FTS5, kept current on message writes) vs. a separate index;
    include archived sessions (item 1) and child sessions (item 3)? Possibly just use fast-resume
    itself for other agents' history.
+5. **Transcript readability (expanded mode).** Harder to read than pi's TUI. Worst offender: every
+   tool call and thought gets its own header row ("Shell ▾", "Thought 2s ▾") above the content,
+   which says nothing in expanded mode (a command block is obviously a shell; thinking is already
+   greyed). The headers make sense collapsed, not expanded. Constraints from the user: the copy
+   button has the card's top-right corner; no per-card collapse in expanded mode (clicking a command
+   must do nothing); phones have no margins (so no time gutter); nothing that needs hover. Layouts
+   sketched 2026-10-13 (time in a margin, on the command line, terminal-style, border label, shaded
+   blocks); none chosen, parked.
+6. [~] **Give the model a sense of time.** Prototype: patch `core/time-stamps`, opt-in `experimental.time_stamps` (2026-10-14; not released, not tried with a real model yet). Append `[ended 14:32:05, took 12s]` on its own line to every tool
+   result (failed and interrupted ones too; Code Mode `execute` once, not its nested calls), and prefix
+   user messages with `[sent 14:32:05]`. End time, not start: it is the model's "now" when it reads the
+   result, and start = end − took. Durations: `<1s`, plain seconds up to a few minutes (`74s`, cheaper
+   than `1m 14s`), then `12m`. No date (the date instruction already covers it, including day changes);
+   state the time zone once next to it.
+   - Rendered in `to-llm-message.ts` from the stored part/message times, not stored, so old sessions get
+     it too (one full re-read of each on first use). The time zone follows the system (the same one the
+     date uses); changing it re-renders every past stamp, so one full re-read then.
+   - Prototype findings: "took" counts from `ran`, which is before a permission prompt, so a call that
+     waited for approval reports the wait too. Synthetic user-role messages (steers, queued
+     follow-ups, background completions) are not stamped yet. A queued user message is stamped when
+     it is delivered, not when it was typed (keeps stamps in order). Forks keep the original times.
+     Crossing midnight mid-turn: stamps go 23:59 → 00:00 before the "date is now" update arrives.
+   - Opt-in config switch; add it to `core/src/config/normalize.ts`.
+   - Times: tool `time.ran` → `time.completed` (not `created`, which is when the call streamed in); user
+     `time.created`. Completed results: append to the text, or a text part for content results. Error
+     results carry `{ error, content }`; check each provider adapter actually sends `content` before
+     relying on it.
+   - Explain it once, as an instruction next to `core/date` (`instructions/builtins.ts`; keyed, so a
+     change is posted as an update instead of rewriting the prompt): what the stamps are, the time zone,
+     that the harness adds them (not the tool or the user), and not to write them itself.
+   - Code Mode `execute`: one stamp on the whole result (plain text: the return value, then Warnings /
+     Logs). Nested calls return values into the script, not to the model, so stamping them would change
+     what the script sees (string compares, `JSON.parse`). Scripts that need per-call timing have
+     `Date.now()` in the runtime.
+   - Cost (ctok, Claude v4.8 and v3 tokenizers alike, measured 2026-10-13): 16 tokens per tool result
+     (~3.2k per 200 calls, cached after the first send), 11 per user message. Cheaper forms if needed:
+     `[14:32:05 +12s]` 12, `[14:32 +12s]` 10, `[12s]` 5. Two-digit numbers, colons, spaces and brackets
+     are ~1 token each; a full date doubles the stamp.

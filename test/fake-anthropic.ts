@@ -7,6 +7,7 @@
 //   "SHELL x"  → calls the shell tool with command x first, then answers
 //   "QUESTION x" → asks x through the question tool (Yes / No) first, then answers
 //   "ECHO x"   → replies x verbatim (markdown, math)
+//   "TOOL name {json}" → calls any tool with that input first, then answers
 //   a compaction request (checkpoint or summary prompt) → a filled-in template
 //   anything else → a short paragraph
 // Usage reports the request's size (about 4 characters a token), mostly as cache reads.
@@ -18,6 +19,8 @@ const CHUNK_MS = Number(process.env.CHUNK_MS ?? 25)
 const LOG = process.env.FAKE_LOG
 // The newest request body, for checking what the model was sent (tools, system prompt).
 const DUMP = process.env.FAKE_DUMP ?? "/tmp/ocelot-dev/last-request.json"
+// Every request body, one per line (subagents and title requests included).
+const ALL = process.env.FAKE_ALL ?? "/tmp/ocelot-dev/requests.jsonl"
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const event = (e: any) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`
@@ -57,11 +60,15 @@ Bun.serve({
     if (!new URL(req.url).pathname.endsWith("/messages")) return new Response("not found", { status: 404 })
     const body = await req.json()
     if (DUMP) writeFileSync(DUMP, JSON.stringify(body))
+    if (ALL) appendFileSync(ALL, JSON.stringify(body) + "\n")
     if (LOG) appendFileSync(LOG, JSON.stringify({ time: Date.now(), messages: body.messages?.length, tokens: prompt(body).cache_read_input_tokens + prompt(body).cache_creation_input_tokens + 40, last: newestUserText(body).text.slice(0, 40), roles: (body.messages ?? []).map((m: any) => m.role[0]).join("") }) + "\n")
     const { text, afterTool } = newestUserText(body)
     const shell = !afterTool && text.match(/SHELL (.+)/)
     const question = !afterTool && text.match(/QUESTION (.+)/)
-    const tool = shell
+    const any = !afterTool && text.match(/TOOL (\S+) ([\s\S]+)/)
+    const tool = any
+      ? { name: any[1], input: JSON.parse(any[2]) }
+      : shell
       ? { name: "shell", input: { command: shell[1], description: "Run the test command" } }
       : question
         ? { name: "question", input: { questions: [{ header: "Choice", question: question[1], options: [{ label: "Yes", description: "" }, { label: "No", description: "" }] }] } }
